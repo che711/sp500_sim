@@ -1,0 +1,15 @@
+# Кэш цен (скачивается заново)
+prices.csv
+*.csv
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Редакторы и система
+.idea/
+.vscode/
+.DS_Store
