@@ -1,2 +1,0 @@
-[console_scripts]
-sp500-sim = sp500_sim.cli:main
