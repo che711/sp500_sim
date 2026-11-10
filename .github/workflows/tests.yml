@@ -1,25 +1,56 @@
-name: Tests
+name: CI
 
 on:
   push:
   pull_request:
+  schedule:
+    - cron: "0 6 * * 1" # раз в неделю, по понедельникам
+  workflow_dispatch:
 
 jobs:
-  test:
+  tests:
+    # Версии библиотек из requirements.lock, как у вас локально
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.10", "3.12"]
+        python-version: ["3.11", "3.12"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+          cache-dependency-path: requirements.lock
 
       - name: Установка зависимостей
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.lock
+          pip install -e . --no-deps
 
-      - name: Тесты симулятора
-        run: python src/sp500_sim.py --test
+      - name: Линтер
+        run: ruff check .
+
+      - name: Форматирование
+        run: ruff format --check .
+
+      - name: Тесты
+        run: pytest
+
+  latest-deps:
+    # Самые новые версии библиотек: заранее видно, что сломает обновление
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Установка зависимостей
+        run: pip install -e ".[dev]"
+
+      - name: Тесты
+        run: pytest
