@@ -1,1 +1,2 @@
-sp500_sim
+strategies
+web

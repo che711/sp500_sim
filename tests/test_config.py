@@ -1,6 +1,13 @@
 import pytest
 
-from sp500_sim.config import ConfigError, load_config, parse_config
+from sp500_sim.config import (
+    BrokerConfig,
+    ConfigError,
+    DataConfig,
+    collect_config,
+    load_config,
+    parse_config,
+)
 
 
 def test_loads_valid_file(write_config):
@@ -78,3 +85,40 @@ def test_duplicate_strategy_names():
     raw = {"strategies": [{"type": "buy_and_hold"}, {"type": "buy_and_hold"}]}
     with pytest.raises(ConfigError, match="повторяется"):
         parse_config(raw)
+
+
+def test_collect_config_reports_every_error_with_its_field():
+    raw = {
+        "data": {"ticker": "плохо!", "start": "вчера"},
+        "broker": {"commission": 5, "slippage": -1},
+        "run": {"cash": 0},
+        "strategies": [{"type": "sma_trend", "n": 1}, {"type": "momentum"}],
+    }
+    config, errors = collect_config(raw)
+    assert config is None
+    assert {e.field for e in errors} == {
+        "data.ticker",
+        "data.start",
+        "broker.commission",
+        "broker.slippage",
+        "run.cash",
+        "strategies.0",
+        "strategies.1",
+    }
+
+
+def test_section_error_lists_all_its_problems():
+    with pytest.raises(ConfigError) as info:
+        BrokerConfig(commission=-1, slippage=-1)
+    assert [e.field for e in info.value.errors] == ["broker.commission", "broker.slippage"]
+
+
+@pytest.mark.parametrize("ticker", ["SPY", "^GSPC", "BRK-B", "EURUSD=X", "BTC-USD"])
+def test_good_tickers(ticker):
+    assert DataConfig(ticker=ticker).ticker == ticker
+
+
+@pytest.mark.parametrize("ticker", ["", " ", "SP Y", "../etc", "A" * 21, "а"])
+def test_bad_tickers(ticker):
+    with pytest.raises(ConfigError, match="ticker"):
+        DataConfig(ticker=ticker)
