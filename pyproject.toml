@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sp500-sim"
-version = "0.2.0"
+version = "0.3.0"
 description = "Симулятор торговли на исторических данных S&P 500"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -16,10 +16,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+web = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
+]
 dev = [
     "pytest>=8",
     "ruff>=0.6",
     "pre-commit>=3",
+    "httpx2>=2.0",
 ]
 
 [project.scripts]
@@ -27,6 +34,9 @@ sp500-sim = "sp500_sim.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+sp500_sim = ["web/templates/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

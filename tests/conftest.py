@@ -1,8 +1,10 @@
+from concurrent.futures import Executor, Future
+
 import numpy as np
 import pandas as pd
 import pytest
 
-from sp500_sim.config import DataConfig
+from sp500_sim.config import DataConfig, load_config
 from sp500_sim.data import cache_file
 
 CONFIG_TEXT = """
@@ -72,3 +74,59 @@ def project(tmp_path, monkeypatch, prices, write_config):
     cache.parent.mkdir(parents=True, exist_ok=True)
     prices.to_csv(cache, index_label="Date")
     return tmp_path
+
+
+class InlineExecutor(Executor):
+    """Выполняет фоновую задачу сразу, в том же потоке: в тестах не нужно ничего ждать."""
+
+    def submit(self, fn, /, *args, **kwargs):
+        future = Future()
+        future.set_result(fn(*args, **kwargs))
+        return future
+
+
+class ManualExecutor(Executor):
+    """Копит задачи и выполняет их по команде run_all: так можно увидеть статус «идёт»."""
+
+    def __init__(self):
+        self.jobs = []
+
+    def submit(self, fn, /, *args, **kwargs):
+        future = Future()
+        self.jobs.append((future, fn, args, kwargs))
+        return future
+
+    def run_all(self):
+        for future, fn, args, kwargs in self.jobs:
+            future.set_result(fn(*args, **kwargs))
+        self.jobs.clear()
+
+
+def _make_client(executor):
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from sp500_sim.web.app import create_app
+
+    app = create_app(
+        results_dir="results",
+        cache_dir="data",
+        defaults=load_config("config.toml"),
+        executor=executor,
+    )
+    return TestClient(app, follow_redirects=False)
+
+
+@pytest.fixture
+def web(project):
+    """Сайт с фоновыми задачами, которые выполняются сразу."""
+    with _make_client(InlineExecutor()) as client:
+        yield client
+
+
+@pytest.fixture
+def web_manual(project):
+    """Сайт, где фоновая задача ждёт команды: (клиент, исполнитель)."""
+    executor = ManualExecutor()
+    with _make_client(executor) as client:
+        yield client, executor

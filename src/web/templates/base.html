@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}sp500-sim{% endblock %}</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; color: #111827; line-height: 1.45; }
+  header { background: #f3f4f6; border-bottom: 1px solid #e5e7eb; padding: .7rem 1.2rem;
+           display: flex; gap: 1.5rem; align-items: baseline; flex-wrap: wrap; }
+  header nav { display: flex; gap: 1.2rem; flex-wrap: wrap; }
+  a { color: #2563eb; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  main { max-width: 1100px; margin: 1.5rem auto; padding: 0 1.2rem; }
+  h1 { margin-top: 0; }
+  fieldset { border: 1px solid #e5e7eb; border-radius: 6px; margin: 1rem 0; padding: .8rem 1rem; }
+  legend { font-weight: 600; padding: 0 .4rem; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: .8rem 1.2rem; }
+  .field { display: flex; flex-direction: column; gap: .2rem; }
+  .field label { font-size: .9rem; color: #374151; }
+  input, select { font: inherit; padding: .35rem .5rem; border: 1px solid #d1d5db; border-radius: 4px; }
+  input.invalid { border-color: #b91c1c; background: #fef2f2; }
+  .hint { color: #6b7280; font-size: .85rem; }
+  .error { color: #b91c1c; font-size: .9rem; }
+  .srow { display: grid; grid-template-columns: 170px 1fr 1fr auto; gap: .5rem; margin-bottom: .5rem;
+          align-items: start; }
+  .srow .error { grid-column: 1 / -1; margin-top: -.3rem; }
+  button { font: inherit; padding: .4rem .9rem; border: 1px solid #d1d5db; border-radius: 4px;
+           background: #fff; cursor: pointer; }
+  button.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+  table { border-collapse: collapse; margin: .8rem 0; }
+  th, td { border: 1px solid #e5e7eb; padding: .35rem .7rem; text-align: left; }
+  th { background: #f3f4f6; }
+  td.num { text-align: right; }
+  .badge { padding: .1rem .5rem; border-radius: 10px; font-size: .85rem; }
+  .badge.done { background: #dcfce7; color: #166534; }
+  .badge.running { background: #fef9c3; color: #854d0e; }
+  .badge.error { background: #fee2e2; color: #991b1b; }
+  .sub { color: #6b7280; margin-top: 0; }
+  iframe { width: 100%; height: 85vh; border: 1px solid #e5e7eb; border-radius: 6px; }
+  .box { border: 1px solid #e5e7eb; border-radius: 6px; padding: .8rem 1rem; }
+  .neg { color: #b91c1c; }
+</style>
+</head>
+<body>
+<header>
+  <strong>sp500-sim</strong>
+  <nav>
+    <a href="/">Новый прогон</a>
+    <a href="/runs">Прогоны</a>
+    <a href="/compare">Сравнение</a>
+    <a href="/api/docs">API</a>
+  </nav>
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

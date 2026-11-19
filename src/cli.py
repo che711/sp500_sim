@@ -12,12 +12,12 @@ import pandas as pd
 
 from . import storage
 from .compare import config_diff
-from .config import load_config
+from .config import default_config, load_config
 from .engine import RunResult
 from .errors import SimError
 from .metrics import fmt_money, fmt_pct, format_metrics
 from .report import build_html
-from .runner import execute
+from .service import run_and_save
 
 log = logging.getLogger("sp500_sim")
 
@@ -31,22 +31,23 @@ def _results_table(results: list[RunResult]) -> str:
 
 def cmd_run(args: argparse.Namespace) -> int:
     config = load_config(args.config)
-    meta, results = execute(config, refresh=args.refresh)
-    print(_results_table(results))
-
     out_dir = Path(config.output.dir)
-    run_id = None
-    if not args.no_save:
-        with closing(storage.connect(out_dir / DB_NAME)) as conn:
-            run_id = storage.save_run(conn, meta, config.to_dict(), results)
-        print(f"\nПрогон сохранён: №{run_id}")
+    outcome = run_and_save(config, out_dir / DB_NAME, refresh=args.refresh, save=not args.no_save)
+    print(_results_table(outcome.results))
+    if outcome.run_id is not None:
+        print(f"\nПрогон сохранён: №{outcome.run_id}")
 
     if not args.no_report:
-        path = out_dir / (f"run_{run_id}.html" if run_id else "run_unsaved.html")
+        name = f"run_{outcome.run_id}.html" if outcome.run_id else "run_unsaved.html"
+        path = out_dir / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(build_html(results, meta.__dict__, config.to_dict(), run_id), "utf-8")
+        page = build_html(outcome.results, outcome.meta.__dict__, config.to_dict(), outcome.run_id)
+        path.write_text(page, "utf-8")
         print(f"Отчёт: {path}")
     return 0
+
+
+STATUS_WORDS = {"running": "идёт", "done": "готов", "error": "ошибка"}
 
 
 def cmd_runs(args: argparse.Namespace) -> int:
@@ -55,7 +56,20 @@ def cmd_runs(args: argparse.Namespace) -> int:
     if runs.empty:
         print("Сохранённых прогонов пока нет.")
         return 0
-    runs.columns = ["№", "Время (UTC)", "Коммит", "Тикер", "Данные с", "по", "Стратегии"]
+    runs["status"] = runs["status"].map(STATUS_WORDS).fillna(runs["status"])
+    runs.columns = [
+        "№",
+        "Время (UTC)",
+        "Статус",
+        "Коммит",
+        "Тикер",
+        "Данные с",
+        "по",
+        "Стратегии",
+        "Ошибка",
+    ]
+    if runs["Ошибка"].isna().all():
+        runs = runs.drop(columns="Ошибка")
     print(runs.fillna("—").to_string(index=False))
     return 0
 
@@ -103,6 +117,32 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    try:
+        import uvicorn
+
+        from .web.app import create_app
+    except ImportError as exc:
+        raise SimError(
+            "Для сайта нужны дополнительные библиотеки: pip install -e '.[web]'"
+        ) from exc
+
+    if args.config is not None:
+        defaults = load_config(args.config)
+    elif Path("config.toml").exists():
+        defaults = load_config("config.toml")
+    else:
+        defaults = default_config()
+    app = create_app(
+        results_dir=args.dir or defaults.output.dir,
+        cache_dir=defaults.data.cache_dir,
+        defaults=defaults,
+    )
+    print(f"Сайт: http://{args.host}:{args.port}  (остановить: Ctrl+C)")
+    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="sp500-sim", description="Симулятор торговли на истории S&P 500"
@@ -131,6 +171,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dir", default=DEFAULT_DIR, help="папка с результатами")
     p.add_argument("-o", "--output", help="куда записать отчёт")
     p.set_defaults(func=cmd_report)
+
+    p = sub.add_parser("serve", help="запустить сайт")
+    p.add_argument("--config", help="файл настроек для значений по умолчанию (config.toml)")
+    p.add_argument("--dir", help="папка с результатами (по умолчанию из настроек)")
+    p.add_argument("--host", default="127.0.0.1", help="адрес (по умолчанию только этот компьютер)")
+    p.add_argument("--port", type=int, default=8000)
+    p.set_defaults(func=cmd_serve)
     return parser
 
 

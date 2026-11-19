@@ -1,3 +1,5 @@
+import pytest
+
 from sp500_sim.cli import main
 
 
@@ -29,6 +31,7 @@ def test_runs_lists_saved_runs(project, capsys):
     out = capsys.readouterr().out
     assert "Купить и держать, Тренд SMA-50" in out
     assert out.count("TEST") == 2
+    assert out.count("готов") == 2
 
 
 def test_compare_identical_runs(project, capsys):
@@ -77,3 +80,21 @@ def test_errors_return_exit_code_1(project, capsys):
 def test_runs_without_database(project, capsys):
     assert main(["runs"]) == 1
     assert "не найдена" in capsys.readouterr().err
+
+
+def test_serve_starts_server_with_defaults_from_config(project, monkeypatch):
+    uvicorn = pytest.importorskip("uvicorn")
+    from fastapi import FastAPI
+
+    started = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kwargs: started.update(app=app, **kwargs))
+    assert main(["serve", "--port", "8123"]) == 0
+    assert isinstance(started["app"], FastAPI)
+    assert started["host"] == "127.0.0.1"  # по умолчанию только этот компьютер
+    assert started["port"] == 8123
+
+
+def test_serve_with_missing_config(project, capsys):
+    pytest.importorskip("uvicorn")
+    assert main(["serve", "--config", "нет.toml"]) == 1
+    assert "не найден" in capsys.readouterr().err

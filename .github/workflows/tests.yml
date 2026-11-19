@@ -50,7 +50,7 @@ jobs:
           python-version: "3.12"
 
       - name: Установка зависимостей
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,web]"
 
       - name: Тесты
         run: pytest

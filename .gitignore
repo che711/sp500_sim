@@ -1,13 +1,20 @@
-# Кэш цен (скачивается заново)
-prices.csv
-*.csv
+# Данные и результаты прогонов (создаются заново)
+data/
+results/
 
 # Python
 __pycache__/
 *.py[cod]
+*.egg-info/
+build/
+dist/
 .venv/
 venv/
 .pytest_cache/
+.ruff_cache/
+
+# Личные настройки
+config.local.toml
 
 # Редакторы и система
 .idea/
