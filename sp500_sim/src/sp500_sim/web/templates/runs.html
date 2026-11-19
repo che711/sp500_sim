@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Прогоны — sp500-sim{% endblock %}
+{% block content %}
+<h1>Прогоны</h1>
+{% if not runs %}
+<p>Прогонов пока нет. <a href="/">Запустите первый.</a></p>
+{% else %}
+<form method="get" action="/compare">
+  <table>
+    <tr><th></th><th>№</th><th>Статус</th><th>Время (UTC)</th><th>Тикер</th><th>Данные</th>
+        <th>Стратегии</th></tr>
+    {% for r in runs %}
+    <tr>
+      <td>{% if r.status == "done" %}<input type="checkbox" name="ids" value="{{ r.id }}">{% endif %}</td>
+      <td><a href="/runs/{{ r.id }}">№{{ r.id }}</a></td>
+      <td><span class="badge {{ r.status }}">{{ STATUS_WORDS.get(r.status, r.status) }}</span></td>
+      <td>{{ r.created_at }}</td>
+      <td>{{ r.ticker }}</td>
+      <td>{% if r.data_start %}{{ r.data_start }} — {{ r.data_end }}{% else %}—{% endif %}</td>
+      <td>{{ r.strategies or "—" }}{% if r.error %}<div class="error">{{ r.error }}</div>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <button type="submit">Сравнить выбранные</button>
+</form>
+{% if runs | selectattr("status", "equalto", "running") | list %}
+<script>setTimeout(() => location.reload(), 3000);</script>
+{% endif %}
+{% endif %}
+{% endblock %}
