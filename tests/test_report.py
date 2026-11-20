@@ -1,7 +1,7 @@
 from sp500_sim.broker import Broker
 from sp500_sim.config import parse_config
 from sp500_sim.engine import run_strategy
-from sp500_sim.report import build_html
+from sp500_sim.report import build_body, build_html
 from sp500_sim.strategies import BuyAndHold, SmaTrend
 
 META = {
@@ -36,7 +36,7 @@ def _build(prices, name="Купить и держать"):
 def test_report_has_all_sections(prices):
     page, _ = _build(prices)
     assert "Прогон №7" in page
-    assert page.count("<svg") == 2  # график капитала и график просадки
+    assert page.count("<svg") == 4  # два графика, каждый для светлой и тёмной темы
     for heading in ("Итоги", "Капитал", "Просадка", "Доходность по годам", "Сделки"):
         assert heading in page
 
@@ -58,3 +58,37 @@ def test_report_without_run_id(prices):
     results = [run_strategy(prices, BuyAndHold(), "bh", 10_000, broker)]
     config = parse_config({"strategies": [{"name": "bh", "type": "buy_and_hold"}]}).to_dict()
     assert "не сохранён" in build_html(results, META, config)
+
+
+def test_report_has_kpi_cards_theme_toggle_and_both_chart_themes(prices):
+    page, _ = _build(prices)
+    assert page.count('class="kpi"') == 2
+    assert 'id="theme-toggle"' in page
+    assert page.count('class="chart-light"') == 2
+    assert page.count('class="chart-dark"') == 2
+
+
+def test_report_is_self_contained(prices):
+    page, _ = _build(prices)
+    for external in ('src="http', 'href="http', "@import", "url(http"):
+        assert external not in page
+
+
+def test_best_value_is_marked_only_when_there_is_one_leader(prices):
+    page, _ = _build(prices)
+    assert 'class="num best"' in page  # у разных стратегий итоги разные
+
+    broker = Broker(0.0005, 0.0005, 0.01)
+    twins = [
+        run_strategy(prices, BuyAndHold(), "первая", 10_000, broker),
+        run_strategy(prices, BuyAndHold(), "вторая", 10_000, broker),
+    ]
+    config = parse_config(
+        {
+            "strategies": [
+                {"name": "первая", "type": "buy_and_hold"},
+                {"name": "вторая", "type": "buy_and_hold"},
+            ]
+        }
+    ).to_dict()
+    assert 'class="num best"' not in build_body(twins, META, config)

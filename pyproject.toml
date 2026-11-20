@@ -36,7 +36,7 @@ sp500-sim = "sp500_sim.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-sp500_sim = ["web/templates/*.html"]
+sp500_sim = ["web/templates/*.html", "theme.css"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

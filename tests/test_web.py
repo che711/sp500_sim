@@ -53,11 +53,12 @@ def test_valid_form_creates_run_and_report(web):
 
     page = web.get("/runs/1")
     assert page.status_code == 200
-    assert "<iframe" in page.text
+    assert "Доходность по годам" in page.text  # отчёт встроен в страницу прогона
+    assert "<iframe" not in page.text
 
     report = web.get("/runs/1/report")
     assert report.status_code == 200
-    assert report.text.count("<svg") == 2
+    assert report.text.count("<svg") == 4
     assert "Тренд SMA-50" in report.text
 
 
@@ -198,7 +199,7 @@ def test_running_job_has_status_and_no_results_yet(web_manual):
 
     executor.run_all()
     assert client.get("/api/runs/1").json()["status"] == "done"
-    assert "<iframe" in client.get("/runs/1").text
+    assert "Доходность по годам" in client.get("/runs/1").text
     assert client.get("/runs/1/report").status_code == 200
 
 
@@ -274,3 +275,31 @@ def test_real_background_thread(project):
             time.sleep(0.05)
             status = client.get(f"/api/runs/{run_id}").json()["status"]
     assert status == "done"
+
+
+# ------------------------------------------------------------------ оформление
+
+
+def test_pages_share_layout_with_theme_toggle_and_active_menu(web):
+    pages = {"/": "Новый прогон", "/runs": "Прогоны", "/compare": "Сравнение"}
+    for url, label in pages.items():
+        page = web.get(url).text
+        assert 'id="theme-toggle"' in page
+        assert f'class="active">{label}</a>' in page, url
+        assert page.count('class="active"') == 1, url
+
+
+def test_compare_marks_the_better_result(web):
+    api_run(web)
+    api_run(web, commission=0.02)  # дорогая комиссия: результат хуже
+    page = web.get("/compare", params={"ids": "1,2"}).text
+    assert 'class="num best"' in page
+    assert page.count('class="num best"') == 5  # итог, доходность, в год, просадка, Sharpe
+
+
+def test_run_page_embeds_report_in_the_site_theme(web):
+    web.post("/runs", data=FORM)
+    page = web.get("/runs/1").text
+    assert page.count('id="theme-toggle"') == 1  # переключатель один, не два
+    assert page.count('class="kpi"') == 2
+    assert "Повторить с этими настройками" in page

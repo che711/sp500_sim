@@ -1,12 +1,24 @@
 {% extends "base.html" %}
 {% block title %}Новый прогон — sp500-sim{% endblock %}
 
-{% macro field(name, label, value, hint="", type="text") %}
-<div class="field">
-  <label for="{{ name }}">{{ label }}</label>
+{% macro field(name, label, value, hint="", type="text", prefix="", suffix="", wide=False) %}
+{% set control %}
   <input id="{{ name }}" name="{{ name }}" type="{{ type }}" value="{{ value }}"
-         {% if type == "text" %}autocomplete="off"{% endif %}
+         {% if type == "text" %}autocomplete="off" spellcheck="false"{% endif %}
+         {% if name in ("cash", "commission", "slippage", "min_change") %}inputmode="decimal"{% endif %}
          {% if errors.get(name) %}class="invalid"{% endif %}>
+{% endset %}
+<div class="field {{ 'wide' if wide }}">
+  <label for="{{ name }}">{{ label }}</label>
+  {% if prefix or suffix %}
+  <div class="input-group">
+    {% if prefix %}<span class="affix">{{ prefix }}</span>{% endif %}
+    {{ control }}
+    {% if suffix %}<span class="affix">{{ suffix }}</span>{% endif %}
+  </div>
+  {% else %}
+  {{ control }}
+  {% endif %}
   {% if hint %}<span class="hint">{{ hint }}</span>{% endif %}
   {% if errors.get(name) %}<span class="error">{{ errors[name] }}</span>{% endif %}
 </div>
@@ -14,76 +26,110 @@
 
 {% macro strategy_row(row, error="") %}
 <div class="srow">
-  <select name="strategy_type">
+  <select name="strategy_type" aria-label="Стратегия">
     {% for s in catalog %}
     <option value="{{ s.type }}" {% if s.type == row.type %}selected{% endif %}>{{ s.type }}</option>
     {% endfor %}
   </select>
-  <input name="strategy_name" value="{{ row.name }}" placeholder="Название (необязательно)">
-  <input name="strategy_params" value="{{ row.params }}" placeholder="Параметры, например n=200"
-         {% if error %}class="invalid"{% endif %}>
-  <button type="button" class="remove" title="Убрать">×</button>
+  <input type="text" name="strategy_name" value="{{ row.name }}" placeholder="Название (необязательно)"
+         aria-label="Название">
+  <input type="text" name="strategy_params" value="{{ row.params }}" placeholder="Параметры: n=200"
+         aria-label="Параметры" {% if error %}class="invalid"{% endif %}>
+  <button type="button" class="btn remove" title="Убрать стратегию" aria-label="Убрать">×</button>
   {% if error %}<span class="error">{{ error }}</span>{% endif %}
 </div>
 {% endmacro %}
 
 {% block content %}
 <h1>Новый прогон</h1>
-{% if errors.get("form") %}<p class="error">{{ errors["form"] }}</p>{% endif %}
+<p class="sub">Выберите данные, условия брокера и стратегии. Результат появится на странице прогона.</p>
+
+{% if errors.get("form") %}<div class="alert alert-error">{{ errors["form"] }}</div>{% endif %}
 {% if errors and not errors.get("form") %}
-<p class="error">Исправьте отмеченные поля.</p>
+<div class="alert alert-error">Исправьте отмеченные поля.</div>
 {% endif %}
 
 <form method="post" action="/runs">
-  <fieldset>
-    <legend>Данные</legend>
-    <div class="grid">
-      {{ field("ticker", "Тикер", v.ticker, "SPY или ^GSPC") }}
-      {{ field("start", "Начало", v.start, "", "date") }}
-      {{ field("end", "Конец (необязательно)", v.end, "пусто — до последнего дня", "date") }}
+  <div class="layout">
+    <div>
+      <section class="card">
+        <h3>Данные</h3>
+        <div class="fields">
+          {{ field("ticker", "Тикер", v.ticker, "", "text", wide=True) }}
+          <div class="wide chips">
+            <button type="button" class="chip" data-ticker="SPY">SPY</button>
+            <button type="button" class="chip" data-ticker="^GSPC">^GSPC</button>
+          </div>
+          {{ field("start", "Начало", v.start, "", "date") }}
+          {{ field("end", "Конец", v.end, "пусто — до последнего дня", "date") }}
+          <div class="wide chips">
+            <button type="button" class="chip" data-start="2000-01-01">С 2000</button>
+            <button type="button" class="chip" data-years="20">20 лет</button>
+            <button type="button" class="chip" data-years="10">10 лет</button>
+            <button type="button" class="chip" data-years="5">5 лет</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h3>Брокер</h3>
+        <div class="fields">
+          {{ field("cash", "Стартовые деньги", v.cash, "", "text", prefix="$", wide=True) }}
+          {{ field("commission", "Комиссия", v.commission, "с каждой сделки", "text", suffix="%") }}
+          {{ field("slippage", "Проскальзывание", v.slippage, "цена хуже на эту долю", "text", suffix="%") }}
+          {{ field("min_change", "Порог торговли", v.min_change, "не торговать при меньшем изменении доли", "text", suffix="%", wide=True) }}
+        </div>
+      </section>
     </div>
-  </fieldset>
 
-  <fieldset>
-    <legend>Брокер</legend>
-    <div class="grid">
-      {{ field("cash", "Стартовые деньги", v.cash) }}
-      {{ field("commission", "Комиссия, %", v.commission, "с каждой сделки") }}
-      {{ field("slippage", "Проскальзывание, %", v.slippage, "цена хуже на эту долю") }}
-      {{ field("min_change", "Порог торговли, %", v.min_change, "не торговать при меньшем изменении доли") }}
-    </div>
-  </fieldset>
+    <section class="card">
+      <h3>Стратегии</h3>
+      <p class="hint">До {{ max_strategies }}. Параметры пишутся через запятую: <code>n=200</code>.</p>
+      <div id="rows">
+        {% for row in v.strategies %}
+        {{ strategy_row(row, errors.get("strategy." ~ loop.index0, "")) }}
+        {% endfor %}
+      </div>
+      <template id="row-template">{{ strategy_row({"type": "", "name": "", "params": ""}) }}</template>
+      <button type="button" class="btn btn-small" id="add">+ Добавить стратегию</button>
 
-  <fieldset>
-    <legend>Стратегии (до {{ max_strategies }})</legend>
-    <div id="rows">
-      {% for row in v.strategies %}
-      {{ strategy_row(row, errors.get("strategy." ~ loop.index0, "")) }}
-      {% endfor %}
-    </div>
-    <template id="row-template">{{ strategy_row({"type": "", "name": "", "params": ""}) }}</template>
-    <button type="button" id="add">+ Добавить стратегию</button>
+      <div class="catalog">
+        <h3>Доступные стратегии</h3>
+        {% for s in catalog %}
+        <div class="catalog-item">
+          <code>{{ s.type }}</code><span>{{ s.doc }}</span>
+          <span class="muted">Параметры: {{ s.params }}</span>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+  </div>
 
-    <table>
-      <tr><th>Стратегия</th><th>Что делает</th><th>Параметры</th></tr>
-      {% for s in catalog %}
-      <tr><td>{{ s.type }}</td><td>{{ s.doc }}</td><td>{{ s.params }}</td></tr>
-      {% endfor %}
-    </table>
-  </fieldset>
-
-  <p>
-    <label><input type="checkbox" name="refresh" {% if v.refresh %}checked{% endif %}>
+  <div class="submit-bar">
+    <button class="btn btn-primary" type="submit">Запустить прогон</button>
+    <label class="check"><input type="checkbox" name="refresh" {% if v.refresh %}checked{% endif %}>
       Скачать цены заново</label>
-  </p>
-  <button class="primary" type="submit">Запустить</button>
+  </div>
 </form>
 
 <script>
-  const rows = document.getElementById("rows");
-  const template = document.getElementById("row-template");
+  const $ = (id) => document.getElementById(id);
+  document.querySelectorAll("[data-ticker]").forEach((button) =>
+    button.addEventListener("click", () => { $("ticker").value = button.dataset.ticker; }));
+  document.querySelectorAll("[data-start]").forEach((button) =>
+    button.addEventListener("click", () => { $("start").value = button.dataset.start; $("end").value = ""; }));
+  document.querySelectorAll("[data-years]").forEach((button) =>
+    button.addEventListener("click", () => {
+      const date = new Date();
+      date.setFullYear(date.getFullYear() - Number(button.dataset.years));
+      $("start").value = date.toISOString().slice(0, 10);
+      $("end").value = "";
+    }));
+
+  const rows = $("rows");
+  const template = $("row-template");
   const maxRows = {{ max_strategies }};
-  document.getElementById("add").addEventListener("click", () => {
+  $("add").addEventListener("click", () => {
     if (rows.children.length < maxRows) rows.appendChild(template.content.cloneNode(true));
   });
   rows.addEventListener("click", (event) => {

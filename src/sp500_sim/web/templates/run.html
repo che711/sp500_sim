@@ -2,13 +2,21 @@
 {% block title %}Прогон №{{ run_id }} — sp500-sim{% endblock %}
 {% block content %}
 <h1>Прогон №{{ run_id }}</h1>
-<p class="sub">
-  {{ meta.ticker }} · {{ meta.created_at }} ·
+<div class="chips">
   <span class="badge {{ meta.status }}">{{ STATUS_WORDS.get(meta.status, meta.status) }}</span>
-</p>
+  <span class="chip">{{ meta.ticker }}</span>
+  {% if meta.data_start %}<span class="chip">{{ meta.data_start }} — {{ meta.data_end }}</span>{% endif %}
+  <span class="chip">комиссия {{ "%.4g" | format(config.broker.commission * 100) }}%</span>
+  <span class="chip">старт $ {{ config.run.cash | money }}</span>
+  <span class="chip">{{ meta.created_at[:16] | replace("T", " ") }} UTC</span>
+</div>
 
 {% if meta.status == "running" %}
-<p class="box">Идёт прогон. Страница обновится сама, когда он закончится.</p>
+<div class="card empty">
+  <div class="spinner" role="status" aria-label="Идёт прогон"></div>
+  <h3>Идёт прогон</h3>
+  <p>Страница обновится сама, когда он закончится.</p>
+</div>
 <script>
   const runId = {{ run_id }};
   async function check() {
@@ -23,15 +31,19 @@
 </script>
 
 {% elif meta.status == "error" %}
-<p class="box error">{{ meta.error }}</p>
-<p><a href="/?from_run={{ run_id }}">Изменить настройки и запустить снова</a></p>
+<div class="alert alert-error"><strong>Прогон не удался.</strong> {{ meta.error }}</div>
+<div class="actions">
+  <a class="btn btn-primary" href="/?from_run={{ run_id }}">Изменить настройки и запустить снова</a>
+  <a class="btn" href="/runs">К списку прогонов</a>
+</div>
 
 {% else %}
-<p>
-  <a href="/runs/{{ run_id }}/report" target="_blank">Открыть отчёт отдельно</a> ·
-  <a href="/?from_run={{ run_id }}">Повторить с этими настройками</a> ·
-  <a href="/api/runs/{{ run_id }}">JSON</a>
-</p>
-<iframe src="/runs/{{ run_id }}/report" title="Отчёт"></iframe>
+<div class="actions">
+  <a class="btn btn-primary" href="/?from_run={{ run_id }}">Повторить с этими настройками</a>
+  <a class="btn" href="/runs/{{ run_id }}/report" target="_blank">Отчёт отдельным файлом</a>
+  <a class="btn" href="/api/runs/{{ run_id }}">JSON</a>
+  <a class="btn" href="/compare?ids={{ run_id }}">Сравнить с другими</a>
+</div>
+{{ body | safe }}
 {% endif %}
 {% endblock %}

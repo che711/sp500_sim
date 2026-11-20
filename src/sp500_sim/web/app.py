@@ -22,8 +22,9 @@ from ..compare import config_diff
 from ..config import Config, default_config
 from ..errors import SimError
 from ..metrics import fmt_money, fmt_pct
-from ..report import build_html
+from ..report import HIGHER_IS_BETTER, build_body, build_html
 from ..storage import RunNotFinishedError, StorageError
+from ..theme import CSS, FAVICON, HEAD_JS, LOGO_SVG, TOGGLE_JS
 from .forms import (
     MAX_STRATEGIES,
     FormValues,
@@ -62,6 +63,18 @@ def _parse_ids(values: list[str]) -> list[int]:
 def _records(df: Any) -> list[dict[str, Any]]:
     """Таблица pandas -> список словарей; пустые значения становятся None."""
     return json.loads(df.to_json(orient="records", force_ascii=False))
+
+
+def _best_values(rows: list[dict[str, Any]]) -> dict[str, float]:
+    """Лучшее значение каждой метрики, если лидер один: такие ячейки подсвечиваются."""
+    best: dict[str, float] = {}
+    if len(rows) < 2:
+        return best
+    for key in HIGHER_IS_BETTER:
+        values = [r[key] for r in rows]
+        if values.count(max(values)) == 1:
+            best[key] = max(values)
+    return best
 
 
 def _public_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -107,7 +120,14 @@ def create_app(
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     templates.env.filters["pct"] = fmt_pct
     templates.env.filters["money"] = fmt_money
-    templates.env.globals["STATUS_WORDS"] = STATUS_WORDS
+    templates.env.globals.update(
+        STATUS_WORDS=STATUS_WORDS,
+        theme_css=CSS,
+        head_js=HEAD_JS,
+        toggle_js=TOGGLE_JS,
+        favicon=FAVICON,
+        logo_svg=LOGO_SVG,
+    )
 
     def submit(config: Config, refresh: bool) -> int:
         run_id = service.start_run(config, db_path)
@@ -122,6 +142,7 @@ def create_app(
             "errors": errors,
             "catalog": strategy_catalog(),
             "max_strategies": MAX_STRATEGIES,
+            "active": "new",
         }
         return templates.TemplateResponse(request, "form.html", context, status_code=status_code)
 
@@ -144,7 +165,7 @@ def create_app(
         if request.url.path.startswith("/api/"):
             return JSONResponse({"error": str(exc)}, status_code=code)
         return templates.TemplateResponse(
-            request, "error.html", {"message": str(exc)}, status_code=code
+            request, "error.html", {"message": str(exc), "active": ""}, status_code=code
         )
 
     # ----------------------------------------------------------- страницы
@@ -173,13 +194,18 @@ def create_app(
         with db() as conn:
             runs = _records(storage.list_runs(conn))
         runs.reverse()  # новые сверху
-        return templates.TemplateResponse(request, "runs.html", {"runs": runs})
+        return templates.TemplateResponse(request, "runs.html", {"runs": runs, "active": "runs"})
 
     @app.get("/runs/{run_id}", response_class=HTMLResponse)
     def run_page(request: Request, run_id: int) -> Response:
+        body = None
         with db() as conn:
-            meta, _ = storage.load_meta(conn, run_id)
-        return templates.TemplateResponse(request, "run.html", {"run_id": run_id, "meta": meta})
+            meta, config = storage.load_meta(conn, run_id)
+            if meta["status"] == "done":
+                run = storage.load_run(conn, run_id)
+                body = build_body(run.results, run.meta, run.config)
+        context = {"run_id": run_id, "meta": meta, "config": config, "body": body, "active": "runs"}
+        return templates.TemplateResponse(request, "run.html", context)
 
     @app.get("/runs/{run_id}/report", response_class=HTMLResponse)
     def report_page(run_id: int) -> Response:
@@ -196,9 +222,18 @@ def create_app(
             with db() as conn:
                 runs = [r for r in _records(storage.list_runs(conn)) if r["status"] == "done"]
             runs.reverse()
-            return templates.TemplateResponse(request, "compare.html", {"runs": runs, "rows": None})
+            context = {"runs": runs, "rows": None, "active": "compare"}
+            return templates.TemplateResponse(request, "compare.html", context)
         table, diff = compare_data(run_ids)
-        context = {"runs": [], "rows": table.to_dict("records"), "diff": diff, "ids": run_ids}
+        rows = table.to_dict("records")
+        context = {
+            "runs": [],
+            "rows": rows,
+            "best": _best_values(rows),
+            "diff": diff,
+            "ids": run_ids,
+            "active": "compare",
+        }
         return templates.TemplateResponse(request, "compare.html", context)
 
     # ---------------------------------------------------------------- API
