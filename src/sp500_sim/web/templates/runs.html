@@ -2,26 +2,42 @@
 {% block title %}Прогоны — sp500-sim{% endblock %}
 {% block content %}
 <h1>Прогоны</h1>
+<p class="sub">Все сохранённые прогоны: и с сайта, и из командной строки.</p>
+
 {% if not runs %}
-<p>Прогонов пока нет. <a href="/">Запустите первый.</a></p>
+<div class="card empty">
+  <h3>Прогонов пока нет</h3>
+  <p>Запустите первый, и он появится здесь.</p>
+  <a class="btn btn-primary" href="/">Новый прогон</a>
+</div>
 {% else %}
 <form method="get" action="/compare">
-  <table>
-    <tr><th></th><th>№</th><th>Статус</th><th>Время (UTC)</th><th>Тикер</th><th>Данные</th>
-        <th>Стратегии</th></tr>
-    {% for r in runs %}
-    <tr>
-      <td>{% if r.status == "done" %}<input type="checkbox" name="ids" value="{{ r.id }}">{% endif %}</td>
-      <td><a href="/runs/{{ r.id }}">№{{ r.id }}</a></td>
-      <td><span class="badge {{ r.status }}">{{ STATUS_WORDS.get(r.status, r.status) }}</span></td>
-      <td>{{ r.created_at }}</td>
-      <td>{{ r.ticker }}</td>
-      <td>{% if r.data_start %}{{ r.data_start }} — {{ r.data_end }}{% else %}—{% endif %}</td>
-      <td>{{ r.strategies or "—" }}{% if r.error %}<div class="error">{{ r.error }}</div>{% endif %}</td>
-    </tr>
-    {% endfor %}
-  </table>
-  <button type="submit">Сравнить выбранные</button>
+  <div class="card table-card">
+    <table class="data">
+      <thead>
+        <tr><th></th><th>№</th><th>Статус</th><th>Тикер</th><th>Данные</th><th>Стратегии</th>
+            <th>Время (UTC)</th></tr>
+      </thead>
+      <tbody>
+        {% for r in runs %}
+        <tr>
+          <td>{% if r.status == "done" %}<input type="checkbox" name="ids" value="{{ r.id }}"
+                                               aria-label="Сравнить прогон {{ r.id }}">{% endif %}</td>
+          <td><a href="/runs/{{ r.id }}"><strong>№{{ r.id }}</strong></a></td>
+          <td><span class="badge {{ r.status }}">{{ STATUS_WORDS.get(r.status, r.status) }}</span></td>
+          <td>{{ r.ticker }}</td>
+          <td>{% if r.data_start %}{{ r.data_start }} — {{ r.data_end }}{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td class="wrap">{{ r.strategies or "—" }}{% if r.error %}<div class="error">{{ r.error }}</div>{% endif %}</td>
+          <td class="muted">{{ r.created_at[:16] | replace("T", " ") }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="actions">
+    <button class="btn" type="submit">Сравнить выбранные</button>
+    <a class="btn btn-primary" href="/">Новый прогон</a>
+  </div>
 </form>
 {% if runs | selectattr("status", "equalto", "running") | list %}
 <script>setTimeout(() => location.reload(), 3000);</script>

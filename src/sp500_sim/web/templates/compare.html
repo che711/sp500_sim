@@ -4,53 +4,74 @@
 <h1>Сравнение прогонов</h1>
 
 {% if rows is none %}
+<p class="sub">Выберите два прогона или больше. Я покажу метрики рядом и чем отличались настройки.</p>
 {% if not runs %}
-<p>Готовых прогонов пока нет. <a href="/">Запустите первый.</a></p>
+<div class="card empty">
+  <h3>Готовых прогонов пока нет</h3>
+  <p>Сравнивать пока нечего.</p>
+  <a class="btn btn-primary" href="/">Новый прогон</a>
+</div>
 {% else %}
 <form method="get" action="/compare">
-  <p>Выберите прогоны для сравнения:</p>
-  {% for r in runs %}
-  <div>
-    <label><input type="checkbox" name="ids" value="{{ r.id }}">
-      №{{ r.id }} · {{ r.ticker }} · {{ r.strategies }}</label>
+  <div class="card">
+    {% for r in runs %}
+    <label class="check" style="padding:.4rem 0; color:var(--text)">
+      <input type="checkbox" name="ids" value="{{ r.id }}">
+      <span><strong>№{{ r.id }}</strong> · {{ r.ticker }} · <span class="muted">{{ r.strategies }}</span></span>
+    </label>
+    {% endfor %}
   </div>
-  {% endfor %}
-  <p><button class="primary" type="submit">Сравнить</button></p>
+  <div class="actions"><button class="btn btn-primary" type="submit">Сравнить</button></div>
 </form>
 {% endif %}
 
 {% else %}
-<table>
-  <tr><th>№</th><th>Тикер</th><th>Стратегия</th><th>Итог, $</th><th>Доходность</th>
-      <th>В год</th><th>Просадка</th><th>Sharpe</th><th>Сделок</th></tr>
-  {% for r in rows %}
-  <tr>
-    <td><a href="/runs/{{ r.run_id }}">№{{ r.run_id }}</a></td>
-    <td>{{ r.ticker }}</td>
-    <td>{{ r.strategy }}</td>
-    <td class="num">{{ r.final_value | money }}</td>
-    <td class="num">{{ r.total_return | pct }}</td>
-    <td class="num">{{ r.cagr | pct }}</td>
-    <td class="num">{{ r.max_drawdown | pct }}</td>
-    <td class="num">{{ "%.2f" | format(r.sharpe) }}</td>
-    <td class="num">{{ r.n_trades }}</td>
-  </tr>
-  {% endfor %}
-</table>
+<p class="sub">Лучшее значение в каждом столбце отмечено цветом, если лидер один.</p>
+<div class="card table-card">
+  <table class="data">
+    <thead>
+      <tr><th>№</th><th>Тикер</th><th>Стратегия</th><th class="num">Итог, $</th>
+          <th class="num">Доходность</th><th class="num">В год</th><th class="num">Просадка</th>
+          <th class="num">Sharpe</th><th class="num">Сделок</th></tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td><a href="/runs/{{ r.run_id }}"><strong>№{{ r.run_id }}</strong></a></td>
+        <td>{{ r.ticker }}</td>
+        <td class="wrap">{{ r.strategy }}</td>
+        <td class="num {{ 'best' if best.get('final_value') == r.final_value }}">{{ r.final_value | money }}</td>
+        <td class="num {{ 'best' if best.get('total_return') == r.total_return }}">{{ r.total_return | pct }}</td>
+        <td class="num {{ 'best' if best.get('cagr') == r.cagr }}">{{ r.cagr | pct }}</td>
+        <td class="num {{ 'best' if best.get('max_drawdown') == r.max_drawdown }}">{{ r.max_drawdown | pct }}</td>
+        <td class="num {{ 'best' if best.get('sharpe') == r.sharpe }}">{{ "%.2f" | format(r.sharpe) }}</td>
+        <td class="num">{{ r.n_trades }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
 
 <h2>Чем отличаются прогоны</h2>
 {% if not diff %}
-<p>Настройки, код и данные у этих прогонов совпадают.</p>
+<div class="alert alert-info">Настройки, код и данные у этих прогонов совпадают.</div>
 {% else %}
-<table>
-  <tr><th>Параметр</th>{% for i in ids %}<th>№{{ i }}</th>{% endfor %}</tr>
-  {% for key, values in diff.items() %}
-  <tr>
-    <td>{{ key }}</td>
-    {% for i in ids %}<td>{{ values.get(i) if values.get(i) is not none else "—" }}</td>{% endfor %}
-  </tr>
-  {% endfor %}
-</table>
+<div class="card table-card">
+  <table class="data">
+    <thead>
+      <tr><th>Параметр</th>{% for i in ids %}<th>№{{ i }}</th>{% endfor %}</tr>
+    </thead>
+    <tbody>
+      {% for key, values in diff.items() %}
+      <tr>
+        <td><code>{{ key }}</code></td>
+        {% for i in ids %}<td>{{ values.get(i) if values.get(i) is not none else "—" }}</td>{% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
 {% endif %}
+<div class="actions"><a class="btn" href="/compare">Выбрать другие прогоны</a></div>
 {% endif %}
 {% endblock %}
