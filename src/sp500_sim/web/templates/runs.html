@@ -1,8 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Прогоны — sp500-sim{% endblock %}
 {% block content %}
-<h1>Прогоны</h1>
-<p class="sub">Все сохранённые прогоны: и с сайта, и из командной строки.</p>
+<section class="card hero">
+  <h1>Прогоны</h1>
+  <p class="sub" style="margin:0">Все сохранённые прогоны: и с сайта, и из командной строки.</p>
+</section>
 
 {% if not runs %}
 <div class="card empty">

@@ -17,13 +17,14 @@ from .engine import RunResult
 from .metrics import LABELS, fmt_money, fmt_pct, format_metrics, yearly_returns
 from .theme import CSS, FAVICON, HEAD_JS, TOGGLE_JS
 
+# Цвета линий совпадают с цветами плиток стратегий (tile-0 ... tile-5 в theme.css)
 PALETTES = {
-    "light": ["#2563eb", "#ea580c", "#16a34a", "#9333ea", "#dc2626", "#0891b2"],
-    "dark": ["#60a5fa", "#fb923c", "#4ade80", "#c084fc", "#f87171", "#22d3ee"],
+    "light": ["#7d6fe0", "#4a9fe0", "#e0709f", "#e8993a", "#3fb583", "#e0605e"],
+    "dark": ["#a99bff", "#6cb6ff", "#ff8fb8", "#ffb35c", "#5fe0a8", "#ff8a85"],
 }
 AXIS = {
-    "light": {"text": "#64748b", "grid": "#e2e8f0"},
-    "dark": {"text": "#94a3b8", "grid": "#243049"},
+    "light": {"text": "#7a7699", "grid": "#e6e3f5"},
+    "dark": {"text": "#b3afdc", "grid": "#3a3566"},
 }
 MAX_TRADE_ROWS = 1000
 HIGHER_IS_BETTER = ("final_value", "total_return", "cagr", "max_drawdown", "sharpe")
@@ -33,10 +34,6 @@ Cell = str | tuple[str, str]  # текст или (текст, css-класс)
 
 def _esc(value: object) -> str:
     return html.escape(str(value))
-
-
-def _signed_pct(value: float) -> str:
-    return f"{value * 100:+.1f}%"
 
 
 def _sign_class(value: float) -> str:
@@ -142,22 +139,22 @@ def _table(
 
 
 def _kpis(results: list[RunResult]) -> str:
+    """Цветные плитки: по одной на стратегию, главная цифра - доходность за весь период."""
     cards = []
     for i, r in enumerate(results):
         m = r.metrics
-        light = PALETTES["light"][i % len(PALETTES["light"])]
-        dark = PALETTES["dark"][i % len(PALETTES["dark"])]
+        gain = m["total_return"] >= 0
         cards.append(
-            f'<div class="kpi"><div class="kpi-name">'
-            f'<span class="kpi-dot" style="--c-light:{light};--c-dark:{dark}"></span>'
-            f"{_esc(r.name)}</div>"
-            f'<div class="kpi-value {_sign_class(m["total_return"])}">'
-            f"{_signed_pct(m['total_return'])}</div>"
+            f'<div class="kpi tile-{i % 6}">'
+            f'<div class="kpi-name">{_esc(r.name)}</div>'
+            f'<div class="kpi-value"><span class="kpi-num">{m["total_return"] * 100:+.1f}</span>'
+            f'<span class="kpi-unit">%</span></div>'
+            f'<div class="kpi-pill">{"Прибыль" if gain else "Убыток"}</div>'
             f'<div class="kpi-rows">'
-            f"<span>Итог</span><span>$ {fmt_money(m['final_value'])}</span>"
-            f"<span>В год</span><span>{fmt_pct(m['cagr'])}</span>"
-            f"<span>Макс. просадка</span><span>{fmt_pct(m['max_drawdown'])}</span>"
-            f"<span>Sharpe</span><span>{m['sharpe']:.2f}</span>"
+            f"<div><small>Итог</small><b>$ {fmt_money(m['final_value'])}</b></div>"
+            f"<div><small>В год</small><b>{fmt_pct(m['cagr'])}</b></div>"
+            f"<div><small>Просадка</small><b>{fmt_pct(m['max_drawdown'])}</b></div>"
+            f"<div><small>Sharpe</small><b>{m['sharpe']:.2f}</b></div>"
             f"</div></div>"
         )
     return f'<div class="kpis">{"".join(cards)}</div>'
@@ -288,14 +285,13 @@ def build_html(
 <style>{CSS}</style>
 </head>
 <body>
+<button class="theme-toggle floating-toggle" id="theme-toggle" type="button"
+        aria-label="Сменить тему"></button>
 <div class="container">
-<div class="report-head">
-  <div>
-    <h1>{_esc(title)}</h1>
-    <p class="sub">{_esc(meta["ticker"])}, {_esc(meta["data_start"])} — {_esc(meta["data_end"])}</p>
-  </div>
-  <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Сменить тему"></button>
-</div>
+<section class="card hero">
+  <h1>{_esc(title)}</h1>
+  <p class="sub">{_esc(meta["ticker"])}, {_esc(meta["data_start"])} — {_esc(meta["data_end"])}</p>
+</section>
 {build_body(results, meta, config)}
 </div>
 <script>{TOGGLE_JS}</script>
