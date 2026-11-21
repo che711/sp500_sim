@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Прогон №{{ run_id }} — sp500-sim{% endblock %}
 {% block content %}
+<section class="card hero">
 <h1>Прогон №{{ run_id }}</h1>
 <div class="chips">
   <span class="badge {{ meta.status }}">{{ STATUS_WORDS.get(meta.status, meta.status) }}</span>
@@ -10,6 +11,7 @@
   <span class="chip">старт $ {{ config.run.cash | money }}</span>
   <span class="chip">{{ meta.created_at[:16] | replace("T", " ") }} UTC</span>
 </div>
+</section>
 
 {% if meta.status == "running" %}
 <div class="card empty">

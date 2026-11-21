@@ -301,5 +301,5 @@ def test_run_page_embeds_report_in_the_site_theme(web):
     web.post("/runs", data=FORM)
     page = web.get("/runs/1").text
     assert page.count('id="theme-toggle"') == 1  # переключатель один, не два
-    assert page.count('class="kpi"') == 2
+    assert page.count('<div class="kpi tile-') == 2
     assert "Повторить с этими настройками" in page

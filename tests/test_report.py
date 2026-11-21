@@ -62,7 +62,7 @@ def test_report_without_run_id(prices):
 
 def test_report_has_kpi_cards_theme_toggle_and_both_chart_themes(prices):
     page, _ = _build(prices)
-    assert page.count('class="kpi"') == 2
+    assert page.count('<div class="kpi tile-') == 2
     assert 'id="theme-toggle"' in page
     assert page.count('class="chart-light"') == 2
     assert page.count('class="chart-dark"') == 2

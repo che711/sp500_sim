@@ -41,8 +41,10 @@
 {% endmacro %}
 
 {% block content %}
-<h1>Новый прогон</h1>
-<p class="sub">Выберите данные, условия брокера и стратегии. Результат появится на странице прогона.</p>
+<section class="card hero">
+  <h1>Новый прогон</h1>
+  <p class="sub" style="margin:0">Выберите данные, условия брокера и стратегии. Результат появится на странице прогона.</p>
+</section>
 
 {% if errors.get("form") %}<div class="alert alert-error">{{ errors["form"] }}</div>{% endif %}
 {% if errors and not errors.get("form") %}
