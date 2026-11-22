@@ -56,7 +56,8 @@ def fmt_money(value: float) -> str:
 
 
 def fmt_pct(value: float) -> str:
-    return f"{value * 100:.1f}%"
+    percent = round(value * 100, 1)
+    return f"{percent + 0.0:.1f}%"  # + 0.0 убирает «-0.0%»
 
 
 def format_metrics(m: dict[str, float]) -> dict[str, str]:
