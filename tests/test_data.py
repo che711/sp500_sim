@@ -87,3 +87,52 @@ def test_fingerprint_changes_with_data(prices):
     changed = prices.copy()
     changed.iloc[0, 0] += 0.01
     assert fingerprint(prices)["hash"] != fingerprint(changed)["hash"]
+
+
+# ------------------------------------------------------- несколько бумаг
+
+
+def test_align_keeps_only_common_days(stocks):
+    from sp500_sim.data import align
+
+    aligned = align(stocks)
+    assert len({len(df) for df in aligned.values()}) == 1
+    assert aligned["AAA"].index[0] == stocks["CCC"].index[0]  # начало по самой молодой бумаге
+    assert aligned["AAA"].index.equals(aligned["CCC"].index)
+
+
+def test_align_single_asset_is_untouched(stocks):
+    from sp500_sim.data import align
+
+    frames = {"AAA": stocks["AAA"]}
+    assert align(frames) is frames
+
+
+def test_align_without_common_days_is_an_error(stocks):
+    from sp500_sim.data import align
+
+    early = stocks["AAA"].iloc[:100]
+    late = stocks["BBB"].iloc[200:]
+    with pytest.raises(DataError, match="общих торговых дней"):
+        align({"AAA": early, "BBB": late})
+
+
+def test_fingerprint_many_depends_on_every_asset(stocks):
+    from sp500_sim.data import fingerprint_many
+
+    base = fingerprint_many({"AAA": stocks["AAA"], "BBB": stocks["BBB"]})
+    changed = stocks["BBB"].copy()
+    changed.iloc[0, 0] += 0.01
+    assert fingerprint_many({"AAA": stocks["AAA"], "BBB": changed})["hash"] != base["hash"]
+    assert base["rows"] == len(stocks["AAA"])
+
+
+def test_load_many_reads_each_ticker_from_its_own_cache(tmp_path, stocks):
+    from sp500_sim.data import load_many
+
+    cfg = DataConfig(ticker="IGNORED", start="2020-01-01", cache_dir=str(tmp_path))
+    for ticker in ("AAA", "BBB"):
+        stocks[ticker].to_csv(cache_file(cfg, ticker), index_label="Date")
+    loaded = load_many(cfg, ["AAA", "BBB"])
+    assert set(loaded) == {"AAA", "BBB"}
+    assert loaded["AAA"].df.shape == stocks["AAA"].shape

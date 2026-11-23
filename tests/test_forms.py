@@ -1,6 +1,6 @@
 import pytest
 
-from sp500_sim.config import default_config
+from sp500_sim.config import default_config, parse_config
 from sp500_sim.web.forms import (
     MAX_STRATEGIES,
     FormValues,
@@ -163,3 +163,127 @@ def test_catalog_lists_strategies_with_default_params():
 def test_stored_config_can_be_read_back():
     config = default_config()
     assert config_from_stored(config.to_dict()) == config
+
+
+def test_color_from_form_reaches_config():
+    values = _values()
+    values.strategies = [
+        StrategyRow("buy_and_hold", "a", "", "#ff0000"),
+        StrategyRow("sma_trend", "b", "n=50", ""),  # без цвета: берётся палитра
+    ]
+    config, errors = parse_form(values, **DIRS)
+    assert errors == {}
+    assert [s.color for s in config.strategies] == ["#ff0000", None]
+
+
+def test_bad_color_is_reported_in_its_row():
+    values = _values()
+    values.strategies = [StrategyRow("buy_and_hold", "a", "", "красный")]
+    config, errors = parse_form(values, **DIRS)
+    assert config is None
+    assert "#rrggbb" in errors["strategy.0"]
+
+
+def test_form_shows_palette_color_when_strategy_has_none():
+    rows = FormValues.from_config(default_config()).strategies
+    assert [r.color for r in rows] == ["#7d6fe0", "#4a9fe0"]
+
+
+def test_custom_color_survives_store_and_read_back():
+    raw = {"strategies": [{"name": "a", "type": "buy_and_hold", "color": "#ff0000"}]}
+    config = parse_config(raw)
+    assert config_from_stored(config.to_dict()).strategies[0].color == "#ff0000"
+    assert FormValues.from_config(config).strategies[0].color == "#ff0000"
+
+
+def test_old_stored_runs_without_color_still_load():
+    stored = default_config().to_dict()
+    for strategy in stored["strategies"]:
+        del strategy["color"]  # так хранились прогоны до появления цветов
+    assert config_from_stored(stored) == default_config()
+
+
+# ------------------------------------------------------------------ портфель
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("", {}),
+        ("AAPL 40, MSFT 60", {"AAPL": 40.0, "MSFT": 60.0}),
+        ("aapl:40; msft:60", {"AAPL": 40.0, "MSFT": 60.0}),
+        ("AAPL 40%, MSFT 60%", {"AAPL": 40.0, "MSFT": 60.0}),
+        ("AAPL 33.5, MSFT 66.5", {"AAPL": 33.5, "MSFT": 66.5}),
+        ("AAPL 40\nMSFT 60", {"AAPL": 40.0, "MSFT": 60.0}),
+        ("^GSPC 50, BRK-B 50", {"^GSPC": 50.0, "BRK-B": 50.0}),
+        ("EURUSD=X 100", {"EURUSD=X": 100.0}),
+    ],
+)
+def test_parse_portfolio(text, expected):
+    from sp500_sim.web.forms import parse_portfolio
+
+    assert parse_portfolio(text) == expected
+
+
+def test_portfolio_without_weights_is_split_equally():
+    from sp500_sim.web.forms import parse_portfolio
+
+    weights = parse_portfolio("AAPL, MSFT, GOOG")
+    assert sum(weights.values()) == pytest.approx(100)
+    assert weights["AAPL"] == pytest.approx(100 / 3)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "AAPL 40, MSFT",
+        "AAPL 40, AAPL 60",
+        "AAPL!, MSFT",
+        "40 AAPL",
+        "A, B, C, D, E, F, G, H, I, J, K",
+    ],
+)
+def test_parse_portfolio_rejects(text):
+    from sp500_sim.web.forms import parse_portfolio
+
+    with pytest.raises(ValueError):
+        parse_portfolio(text)
+
+
+def test_portfolio_from_form_reaches_config():
+    values = _values()
+    values.strategies = [
+        StrategyRow("buy_and_hold", "мой", "", "", "AAPL 70, MSFT 30", "monthly"),
+        StrategyRow("buy_and_hold", "обычный"),
+    ]
+    config, errors = parse_form(values, **DIRS)
+    assert errors == {}
+    assert config.strategies[0].portfolio == {"AAPL": 70.0, "MSFT": 30.0}
+    assert config.strategies[0].rebalance == "monthly"
+    assert config.strategies[1].portfolio is None
+
+
+def test_portfolio_errors_are_shown_in_its_row():
+    values = _values()
+    values.strategies = [StrategyRow("buy_and_hold", "a", "", "", "AAPL 40, MSFT 40")]
+    config, errors = parse_form(values, **DIRS)
+    assert config is None and "100%" in errors["strategy.0"]
+
+    values.strategies = [StrategyRow("buy_and_hold", "a", "", "", "AAPL 40, MSFT")]
+    _, errors = parse_form(values, **DIRS)
+    assert "портфель" in errors["strategy.0"]
+
+
+def test_portfolio_survives_store_and_read_back_and_form_roundtrip():
+    raw = {
+        "strategies": [
+            {"name": "a", "type": "buy_and_hold", "portfolio": {"AAPL": 25, "MSFT": 75}},
+        ]
+    }
+    config = parse_config({**raw, "strategies": [{**raw["strategies"][0], "rebalance": "yearly"}]})
+    assert config_from_stored(config.to_dict()) == config
+
+    row = FormValues.from_config(config).strategies[0]
+    assert row.portfolio == "AAPL 25, MSFT 75" and row.rebalance == "yearly"
+    parsed, errors = parse_form(FormValues.from_config(config), **DIRS)
+    assert errors == {} and parsed.strategies[0].portfolio == {"AAPL": 25.0, "MSFT": 75.0}

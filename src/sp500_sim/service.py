@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import storage
-from .config import Config
+from .config import Config, needed_tickers
 from .engine import RunResult
 from .runner import execute
 from .storage import RunMeta
@@ -51,7 +51,8 @@ def run_and_save(
 def start_run(config: Config, db_path: str | Path) -> int:
     """Заводит прогон в статусе «идёт» и возвращает его номер."""
     with closing(storage.connect(db_path)) as conn:
-        return storage.create_run(conn, config.to_dict(), config.data.ticker)
+        tickers = needed_tickers(config.data, config.strategies)
+        return storage.create_run(conn, config.to_dict(), ", ".join(tickers))
 
 
 def run_in_background(

@@ -2,7 +2,7 @@ from contextlib import closing
 
 import pytest
 
-from sp500_sim import data, service, storage
+from sp500_sim import runner, service, storage
 from sp500_sim.config import load_config
 from sp500_sim.data import DataError
 
@@ -41,14 +41,10 @@ def test_run_with_prepared_record(project):
     ],
 )
 def test_background_error_goes_to_status(project, monkeypatch, error, expected):
-    def fail(_cfg):
+    def fail(*_args, **_kwargs):
         raise error
 
-    monkeypatch.setattr(data, "load_prices", lambda *_a, **_k: fail(None))
-    # runner импортировал load_prices по имени, поэтому подменяем и там
-    from sp500_sim import runner
-
-    monkeypatch.setattr(runner, "load_prices", lambda *_a, **_k: fail(None))
+    monkeypatch.setattr(runner, "load_many", fail)
 
     config = load_config("config.toml")
     run_id = service.start_run(config, "results/results.db")

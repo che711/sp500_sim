@@ -9,10 +9,21 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from .colors import is_hex
 from .errors import SimError
 from .strategies import REGISTRY
 
 TICKER_RE = re.compile(r"[A-Za-z0-9.^=_-]{1,20}")
+
+REBALANCE_MODES = {
+    "never": "никогда",
+    "monthly": "раз в месяц",
+    "quarterly": "раз в квартал",
+    "yearly": "раз в год",
+}
+MAX_PORTFOLIO_ASSETS = 10  # бумаг в одном портфеле
+MAX_TICKERS = 20  # разных бумаг во всём прогоне
+WEIGHT_TOLERANCE = 0.05  # на сколько процентов сумма весов может отличаться от 100
 
 
 class ConfigError(SimError):
@@ -121,6 +132,11 @@ class StrategyConfig:
     name: str
     type: str
     params: dict[str, Any] = field(default_factory=dict)
+    color: str | None = None  # цвет линии и плитки (#rrggbb); без него берётся цвет из палитры
+    # Портфель: тикер -> вес в процентах (в сумме 100). Без него стратегия торгует
+    # бумагой из раздела [data].
+    portfolio: dict[str, float] | None = None
+    rebalance: str = "never"  # как часто возвращать веса портфеля к целевым
 
 
 @dataclass(frozen=True)
@@ -158,6 +174,28 @@ def _section(raw: dict[str, Any], name: str, cls: type) -> Any:
     return cls(**values)
 
 
+def _check_portfolio(value: Any) -> tuple[dict[str, float] | None, str | None]:
+    """Возвращает (портфель, текст ошибки). Тикеры приводятся к верхнему регистру."""
+    if not isinstance(value, dict) or not value:
+        return None, "portfolio: нужен набор «тикер = вес», например { AAPL = 60, MSFT = 40 }"
+    if len(value) > MAX_PORTFOLIO_ASSETS:
+        return None, f"в портфеле не больше {MAX_PORTFOLIO_ASSETS} бумаг"
+    weights: dict[str, float] = {}
+    for ticker, weight in value.items():
+        name = str(ticker).upper()
+        if not TICKER_RE.fullmatch(name):
+            return None, f"тикер {ticker!r}: допустимы латинские буквы, цифры и знаки . ^ = _ -"
+        if name in weights:
+            return None, f"тикер {name} указан дважды"
+        if not _is_number(weight) or weight <= 0:
+            return None, f"вес {name} должен быть положительным числом, получено {weight!r}"
+        weights[name] = float(weight)
+    total = sum(weights.values())
+    if abs(total - 100) > WEIGHT_TOLERANCE:
+        return None, f"веса должны давать 100%, сейчас {total:.4g}%"
+    return weights, None
+
+
 def _strategies(raw: dict[str, Any], errors: list[ConfigError]) -> list[StrategyConfig]:
     items = raw.get("strategies")
     if not isinstance(items, list) or not items:
@@ -189,14 +227,48 @@ def _strategies(raw: dict[str, Any], errors: list[ConfigError]) -> list[Strategy
         if name in seen:
             fail(f"имя стратегии {name!r} повторяется, задайте разные имена")
             continue
+        color = params.pop("color", None)
+        if color is not None and not is_hex(color):
+            fail(f"цвет должен быть в формате #rrggbb, например #e0709f, получено {color!r}")
+            continue
+        portfolio = None
+        if "portfolio" in params:
+            portfolio, problem = _check_portfolio(params.pop("portfolio"))
+            if problem:
+                fail(problem)
+                continue
+        rebalance = params.pop("rebalance", "never")
+        if rebalance not in REBALANCE_MODES:
+            fail(f"rebalance: допустимо {', '.join(REBALANCE_MODES)}, получено {rebalance!r}")
+            continue
         try:
             REGISTRY[type_](**params)
         except (TypeError, ValueError) as exc:
             errors.append(ConfigError(f"[[strategies]] {name!r}: {exc}", where, str(exc)))
             continue
         seen.add(name)
-        result.append(StrategyConfig(name=name, type=type_, params=params))
+        result.append(
+            StrategyConfig(
+                name=name,
+                type=type_,
+                params=params,
+                color=color.lower() if color else None,
+                portfolio=portfolio,
+                rebalance=rebalance,
+            )
+        )
     return result
+
+
+def needed_tickers(data: DataConfig, strategies: list[StrategyConfig]) -> list[str]:
+    """Все бумаги прогона без повторов, в порядке появления. Бумага из [data] нужна только
+    тем стратегиям, у которых нет своего портфеля."""
+    tickers: list[str] = []
+    for strategy in strategies:
+        for ticker in strategy.portfolio or {data.ticker: 100.0}:
+            if ticker not in tickers:
+                tickers.append(ticker)
+    return tickers
 
 
 def collect_config(raw: dict[str, Any]) -> tuple[Config | None, list[ConfigError]]:
@@ -216,6 +288,15 @@ def collect_config(raw: dict[str, Any]) -> tuple[Config | None, list[ConfigError
         except ConfigError as exc:
             errors.extend(exc.errors)
     strategies = _strategies(raw, errors)
+    if not errors:
+        used = needed_tickers(parts["data"], strategies)
+        if len(used) > MAX_TICKERS:
+            errors.append(
+                ConfigError(
+                    f"Всего в прогоне не больше {MAX_TICKERS} разных бумаг, сейчас {len(used)}",
+                    "strategies",
+                )
+            )
     if errors:
         return None, errors
     return Config(strategies=strategies, **parts), []

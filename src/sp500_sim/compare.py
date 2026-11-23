@@ -13,7 +13,11 @@ def _flatten(meta: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
                 flat[f"{section}.{key}"] = value
     for s in config["strategies"]:
         params = ", ".join(f"{k}={v}" for k, v in s["params"].items())
-        flat[f"strategy[{s['name']}]"] = f"{s['type']}({params})"
+        text = f"{s['type']}({params})"
+        if s.get("portfolio"):  # в прогонах, сохранённых раньше, портфеля нет
+            assets = ", ".join(f"{t} {w:g}%" for t, w in s["portfolio"].items())
+            text += f" | {assets} | ребаланс: {s.get('rebalance', 'never')}"
+        flat[f"strategy[{s['name']}]"] = text
     flat["код (коммит)"] = meta["git_commit"]
     flat["данные (хеш)"] = meta["data_hash"]
     return flat

@@ -122,3 +122,120 @@ def test_good_tickers(ticker):
 def test_bad_tickers(ticker):
     with pytest.raises(ConfigError, match="ticker"):
         DataConfig(ticker=ticker)
+
+
+def test_strategy_color_is_optional_and_normalized():
+    cfg = parse_config(
+        {
+            "strategies": [
+                {"name": "a", "type": "buy_and_hold", "color": "#E0709F"},
+                {"name": "b", "type": "buy_and_hold"},
+            ]
+        }
+    )
+    assert [s.color for s in cfg.strategies] == ["#e0709f", None]
+    assert cfg.strategies[0].params == {}  # цвет не попадает в параметры стратегии
+
+
+@pytest.mark.parametrize("color", ["красный", "e0709f", "#fff", 5])
+def test_bad_strategy_color(color):
+    raw = {"strategies": [{"type": "buy_and_hold", "color": color}]}
+    config, errors = collect_config(raw)
+    assert config is None
+    assert errors[0].field == "strategies.0"
+    assert "#rrggbb" in errors[0].detail
+
+
+# ------------------------------------------------------------------ портфели
+
+
+def _portfolio(**extra):
+    return parse_config({"strategies": [{"name": "p", "type": "buy_and_hold", **extra}]})
+
+
+def test_portfolio_and_rebalance_are_read():
+    cfg = _portfolio(portfolio={"aapl": 60, "msft": 40}, rebalance="quarterly")
+    strategy = cfg.strategies[0]
+    assert strategy.portfolio == {"AAPL": 60.0, "MSFT": 40.0}  # тикеры в верхнем регистре
+    assert strategy.rebalance == "quarterly"
+    assert strategy.params == {}  # в параметры стратегии они не попадают
+
+
+def test_portfolio_is_optional():
+    strategy = _portfolio().strategies[0]
+    assert strategy.portfolio is None and strategy.rebalance == "never"
+
+
+def test_portfolio_from_toml_inline_table(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text(
+        '[[strategies]]\ntype = "buy_and_hold"\nportfolio = { AAPL = 50, "^GSPC" = 50 }\n'
+    )
+    assert load_config(path).strategies[0].portfolio == {"AAPL": 50.0, "^GSPC": 50.0}
+
+
+@pytest.mark.parametrize(
+    ("portfolio", "fragment"),
+    [
+        ({"AAPL": 60, "MSFT": 30}, "100%, сейчас 90%"),
+        ({"AAPL": 60, "MSFT": 60}, "100%, сейчас 120%"),
+        ({"AAPL": 100, "MSFT": 0}, "положительным"),
+        ({"AAPL": -10, "MSFT": 110}, "положительным"),
+        ({"AAPL": "много"}, "положительным"),
+        ({"AA PL": 100}, "тикер"),
+        ({}, "portfolio"),
+        ({"aapl": 50, "AAPL": 50}, "дважды"),
+        ("AAPL", "portfolio"),
+        ({f"T{i}": 10 for i in range(11)}, "не больше 10"),
+    ],
+)
+def test_bad_portfolios(portfolio, fragment):
+    config, errors = collect_config(
+        {"strategies": [{"type": "buy_and_hold", "portfolio": portfolio}]}
+    )
+    assert config is None
+    assert errors[0].field == "strategies.0"
+    assert fragment in errors[0].detail
+
+
+def test_bad_rebalance():
+    config, errors = collect_config(
+        {"strategies": [{"type": "buy_and_hold", "rebalance": "weekly"}]}
+    )
+    assert config is None and "rebalance" in errors[0].detail
+
+
+def test_weights_may_be_a_little_off_because_of_rounding():
+    assert _portfolio(portfolio={"A": 33.33, "B": 33.33, "C": 33.33}).strategies[0].portfolio
+
+
+def test_total_ticker_limit():
+    strategies = [
+        {"name": f"s{i}", "type": "buy_and_hold", "portfolio": {f"T{i}{j}": 25 for j in range(4)}}
+        for i in range(6)
+    ]
+    config, errors = collect_config({"strategies": strategies})
+    assert config is None and "не больше 20" in str(errors[0])
+
+
+def test_needed_tickers_uses_data_ticker_only_for_strategies_without_portfolio():
+    from sp500_sim.config import needed_tickers
+
+    with_default = parse_config(
+        {
+            "data": {"ticker": "SPY"},
+            "strategies": [
+                {"name": "a", "type": "buy_and_hold", "portfolio": {"AAPL": 100}},
+                {"name": "b", "type": "buy_and_hold"},
+            ],
+        }
+    )
+    assert needed_tickers(with_default.data, with_default.strategies) == ["AAPL", "SPY"]
+
+    portfolios_only = parse_config(
+        {
+            "data": {"ticker": "SPY"},
+            "strategies": [{"name": "a", "type": "buy_and_hold", "portfolio": {"AAPL": 100}}],
+        }
+    )
+    assert needed_tickers(portfolios_only.data, portfolios_only.strategies) == ["AAPL"]

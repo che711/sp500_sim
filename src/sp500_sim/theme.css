@@ -230,10 +230,16 @@ input[type="checkbox"] { accent-color: var(--accent); width: 1.05rem; height: 1.
 .input-group .affix:last-child { border-left: 0; border-radius: 0 12px 12px 0; }
 .hint { color: var(--muted); font-size: .82rem; }
 .error { color: var(--bad); font-size: .86rem; }
-.srow { display: grid; grid-template-columns: 9.5rem minmax(0, 1fr) minmax(0, 1fr) auto; gap: .5rem;
-        align-items: start; margin-bottom: .6rem; }
-.srow .error { grid-column: 1 / -1; margin-top: -.2rem; }
-@media (max-width: 640px) { .srow { grid-template-columns: 1fr 1fr; } }
+.srow { display: grid; gap: .5rem; padding: .75rem; margin-bottom: .7rem;
+        border: 1px solid var(--line); border-radius: 16px; background: var(--surface-2); }
+.srow-main { display: grid; grid-template-columns: 9.5rem minmax(0, 1fr) auto auto; gap: .5rem;
+             align-items: start; }
+.srow-extra { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) 11rem; gap: .5rem; }
+@media (max-width: 760px) {
+  .srow-main { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .srow-main input[name="strategy_name"] { grid-column: 1 / -1; order: 3; }
+  .srow-extra { grid-template-columns: 1fr; }
+} }
 .remove { width: 38px; height: 38px; padding: 0; justify-content: center; font-size: 1.1rem;
           box-shadow: none; border: 1px solid var(--line); }
 .catalog { margin-top: 1.2rem; border-top: 1px solid var(--line); padding-top: .9rem; }
@@ -303,3 +309,12 @@ details > .scroll { margin-bottom: .9rem; }
          -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
 .chart svg { display: block; width: 100%; height: auto; }
 .params td:first-child { color: var(--muted); width: 14rem; }
+.kpi.on-light { color: #2b2850; }
+.on-light .kpi-pill { background: rgba(0, 0, 0, .08); }
+.on-light .kpi-pill::before { background: #2b2850; }
+.on-light .kpi-rows { background: rgba(255, 255, 255, .35); border-color: rgba(0, 0, 0, .08); }
+.color-input {
+  width: 38px; height: 38px; padding: 3px; cursor: pointer; background: var(--input-bg);
+  border: 1px solid var(--line); border-radius: 12px;
+}
+.kpi-sub { font-size: .8rem; opacity: .88; margin-top: .15rem; }

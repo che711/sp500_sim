@@ -1,4 +1,5 @@
 from sp500_sim.broker import Broker
+from sp500_sim.colors import lighten
 from sp500_sim.config import parse_config
 from sp500_sim.engine import run_strategy
 from sp500_sim.report import build_body, build_html
@@ -92,3 +93,40 @@ def test_best_value_is_marked_only_when_there_is_one_leader(prices):
         }
     ).to_dict()
     assert 'class="num best"' not in build_body(twins, META, config)
+
+
+def _with_colors(prices, colors):
+    broker = Broker(0.0005, 0.0005, 0.01)
+    results = [
+        run_strategy(prices, BuyAndHold(), "первая", 10_000, broker),
+        run_strategy(prices, SmaTrend(50), "вторая", 10_000, broker),
+    ]
+    strategies = [
+        {"name": "первая", "type": "buy_and_hold", **({"color": colors[0]} if colors[0] else {})},
+        {
+            "name": "вторая",
+            "type": "sma_trend",
+            "n": 50,
+            **({"color": colors[1]} if colors[1] else {}),
+        },
+    ]
+    config = parse_config({"strategies": strategies}).to_dict()
+    return build_body(results, META, config)
+
+
+def test_custom_color_is_used_for_tile_and_chart_lines(prices):
+    body = _with_colors(prices, ["#ff0000", None])
+    assert "linear-gradient(135deg,#ff0000" in body  # плитка
+    assert body.count("#ff0000") >= 3  # плитка и линии на графиках
+    assert '<div class="kpi tile-1"' in body  # у второй стратегии цвета нет: палитра
+
+
+def test_dark_theme_lightens_custom_color(prices):
+    body = _with_colors(prices, ["#800000", None])
+    assert "#800000" in body  # светлая тема: как выбрано
+    assert lighten("#800000", 0.3) in body  # тёмная тема: светлее
+
+
+def test_light_custom_color_gets_dark_text(prices):
+    assert 'class="kpi on-light"' in _with_colors(prices, ["#ffff00", None])
+    assert "on-light" not in _with_colors(prices, ["#7d6fe0", None])

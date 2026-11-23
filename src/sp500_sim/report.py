@@ -13,6 +13,8 @@ import pandas as pd
 from matplotlib.figure import Figure
 from matplotlib.ticker import FuncFormatter, LogLocator, MaxNLocator, NullFormatter, NullLocator
 
+from .colors import lighten, luminance
+from .config import REBALANCE_MODES
 from .engine import RunResult
 from .metrics import LABELS, fmt_money, fmt_pct, format_metrics, yearly_returns
 from .theme import CSS, FAVICON, HEAD_JS, TOGGLE_JS
@@ -50,7 +52,14 @@ def _svg(fig: Figure) -> str:
     return svg[svg.index("<svg") :]
 
 
-def _chart(results: list[RunResult], kind: str, theme: str) -> Figure:
+def _line_color(custom: str | None, theme: str, default: str) -> str:
+    """Свой цвет стратегии; на тёмном фоне он слегка осветляется, чтобы линия не терялась."""
+    if not custom:
+        return default
+    return custom if theme == "light" else lighten(custom, 0.3)
+
+
+def _chart(results: list[RunResult], kind: str, theme: str, colors: list[str | None]) -> Figure:
     palette, axis = PALETTES[theme], AXIS[theme]
     fig = Figure(figsize=(10, 3.9), layout="constrained")
     fig.patch.set_alpha(0)
@@ -65,7 +74,7 @@ def _chart(results: list[RunResult], kind: str, theme: str) -> Figure:
     ax.set_axisbelow(True)
 
     for i, r in enumerate(results):
-        color = palette[i % len(palette)]
+        color = _line_color(colors[i], theme, palette[i % len(palette)])
         x = r.equity.index.to_numpy()
         if kind == "equity":
             ax.plot(x, (r.equity / r.start_cash).to_numpy(), label=r.name, color=color, lw=1.8)
@@ -96,9 +105,9 @@ def _chart(results: list[RunResult], kind: str, theme: str) -> Figure:
     return fig
 
 
-def _chart_html(results: list[RunResult], kind: str) -> str:
-    light = _svg(_chart(results, kind, "light"))
-    dark = _svg(_chart(results, kind, "dark"))
+def _chart_html(results: list[RunResult], kind: str, colors: list[str | None]) -> str:
+    light = _svg(_chart(results, kind, "light", colors))
+    dark = _svg(_chart(results, kind, "dark", colors))
     return (
         f'<div class="chart"><div class="chart-light">{light}</div>'
         f'<div class="chart-dark">{dark}</div></div>'
@@ -138,18 +147,47 @@ def _table(
     )
 
 
-def _kpis(results: list[RunResult]) -> str:
+def _strategy_colors(config: dict[str, Any], count: int) -> list[str | None]:
+    """Свои цвета стратегий из настроек; у кого цвета нет, там None (берётся палитра)."""
+    colors = [s.get("color") for s in config.get("strategies", [])]
+    return (colors + [None] * count)[:count]
+
+
+def _portfolio_text(strategy: dict[str, Any]) -> str:
+    """«AAPL 40% · MSFT 60%» для стратегии с портфелем, иначе пустая строка."""
+    portfolio = strategy.get("portfolio")
+    if not portfolio:
+        return ""
+    ordered = sorted(portfolio.items(), key=lambda item: (-item[1], item[0]))  # крупные первыми
+    return " · ".join(f"{t} {w:g}%" for t, w in ordered)
+
+
+def _strategy_notes(config: dict[str, Any], count: int) -> list[str]:
+    notes = [_portfolio_text(s) for s in config.get("strategies", [])]
+    return (notes + [""] * count)[:count]
+
+
+def _tile_attrs(index: int, color: str | None) -> str:
+    if not color:
+        return f'class="kpi tile-{index % 6}"'
+    gradient = f"linear-gradient(135deg,{color} 0%,{lighten(color, 0.35)} 100%)"
+    css = "kpi on-light" if luminance(color) > 0.55 else "kpi"  # на светлом фоне текст тёмный
+    return f'class="{css}" style="background:{gradient}"'
+
+
+def _kpis(results: list[RunResult], colors: list[str | None], notes: list[str]) -> str:
     """Цветные плитки: по одной на стратегию, главная цифра - доходность за весь период."""
     cards = []
     for i, r in enumerate(results):
         m = r.metrics
-        gain = m["total_return"] >= 0
+        sub = f'<div class="kpi-sub">{_esc(notes[i])}</div>' if notes[i] else ""
+        pill = "Прибыль" if m["total_return"] >= 0 else "Убыток"
         cards.append(
-            f'<div class="kpi tile-{i % 6}">'
-            f'<div class="kpi-name">{_esc(r.name)}</div>'
+            f"<div {_tile_attrs(i, colors[i])}>"
+            f'<div class="kpi-name">{_esc(r.name)}</div>{sub}'
             f'<div class="kpi-value"><span class="kpi-num">{m["total_return"] * 100:+.1f}</span>'
             f'<span class="kpi-unit">%</span></div>'
-            f'<div class="kpi-pill">{"Прибыль" if gain else "Убыток"}</div>'
+            f'<div class="kpi-pill">{pill}</div>'
             f'<div class="kpi-rows">'
             f"<div><small>Итог</small><b>$ {fmt_money(m['final_value'])}</b></div>"
             f"<div><small>В год</small><b>{fmt_pct(m['cagr'])}</b></div>"
@@ -190,25 +228,24 @@ def _yearly_table(results: list[RunResult]) -> str:
 def _trades_table(r: RunResult) -> str:
     if r.trades.empty:
         return '<p class="note">Сделок не было.</p>'
+    with_ticker = bool((r.trades["ticker"] != "").any())  # у портфеля тикер нужен в каждой строке
     rows: list[list[Cell]] = []
     for t in r.trades.head(MAX_TRADE_ROWS).itertuples(index=False):
         buy = t.side == "BUY"
-        rows.append(
-            [
-                f"{t.date:%Y-%m-%d}",
-                ("Покупка" if buy else "Продажа", "pos" if buy else "neg"),
-                f"{t.qty:.4f}",
-                fmt_money(t.price),
-                fmt_money(t.fee),
-                fmt_money(t.qty * t.price),
-            ]
-        )
-    table = _table(
-        ["Дата", "Операция", "Штук", "Цена", "Комиссия", "Сумма"],
-        rows,
-        num_from=2,
-        wrapper="scroll",
-    )
+        row: list[Cell] = [f"{t.date:%Y-%m-%d}"]
+        if with_ticker:
+            row.append(_esc(t.ticker))
+        row += [
+            ("Покупка" if buy else "Продажа", "pos" if buy else "neg"),
+            f"{t.qty:.4f}",
+            fmt_money(t.price),
+            fmt_money(t.fee),
+            fmt_money(t.qty * t.price),
+        ]
+        rows.append(row)
+    header = ["Дата"] + (["Тикер"] if with_ticker else [])
+    header += ["Операция", "Штук", "Цена", "Комиссия", "Сумма"]
+    table = _table(header, rows, num_from=len(header) - 4, wrapper="scroll")
     note = ""
     if len(r.trades) > MAX_TRADE_ROWS:
         note = f'<p class="note">Показаны первые {MAX_TRADE_ROWS} из {len(r.trades)}.</p>'
@@ -217,9 +254,13 @@ def _trades_table(r: RunResult) -> str:
 
 def _params_table(meta: dict[str, Any], config: dict[str, Any]) -> str:
     broker = config["broker"]
+    period = f"{meta['data_start']} — {meta['data_end']}, {meta['data_rows']} дней"
+    shift = pd.Timestamp(meta["data_start"]) - pd.Timestamp(config["data"]["start"])
+    if shift > pd.Timedelta(days=10):  # у части бумаг нет истории с запрошенной даты
+        period += f" (запрошено с {config['data']['start']}, раньше нет данных у части бумаг)"
     rows: list[list[Cell]] = [
-        ["Тикер", _esc(meta["ticker"])],
-        ["Данные", _esc(f"{meta['data_start']} — {meta['data_end']}, {meta['data_rows']} дней")],
+        ["Бумаги" if "," in meta["ticker"] else "Тикер", _esc(meta["ticker"])],
+        ["Данные", _esc(period)],
         ["Цены скачаны", _esc(meta["data_fetched_at"])],
         ["Отпечаток данных", f"<code>{_esc(meta['data_hash'])}</code>"],
         ["Стартовый капитал", _esc(fmt_money(config["run"]["cash"]))],
@@ -231,7 +272,11 @@ def _params_table(meta: dict[str, Any], config: dict[str, Any]) -> str:
     ]
     for s in config["strategies"]:
         params = ", ".join(f"{k}={v}" for k, v in s["params"].items()) or "без параметров"
-        rows.append([f"Стратегия «{_esc(s['name'])}»", _esc(f"{s['type']} ({params})")])
+        text = f"{s['type']} ({params})"
+        if s.get("portfolio"):
+            text += f"; портфель {_portfolio_text(s)}; ребалансировка: "
+            text += REBALANCE_MODES.get(s.get("rebalance", "never"), "никогда")
+        rows.append([f"Стратегия «{_esc(s['name'])}»", _esc(text)])
     return _table(["Параметр", "Значение"], rows, css="data params", num_from=None)
 
 
@@ -245,16 +290,18 @@ def build_body(results: list[RunResult], meta: dict[str, Any], config: dict[str,
         f"{_trades_table(r)}</details>"
         for r in results
     )
-    return f"""{_kpis(results)}
+    colors = _strategy_colors(config, len(results))
+    notes = _strategy_notes(config, len(results))
+    return f"""{_kpis(results, colors, notes)}
 
 <h2>Итоги</h2>
 {_metrics_table(results)}
 
 <h2>Капитал</h2>
-{_chart_html(results, "equity")}
+{_chart_html(results, "equity", colors)}
 
 <h2>Просадка</h2>
-{_chart_html(results, "drawdown")}
+{_chart_html(results, "drawdown", colors)}
 
 <h2>Доходность по годам</h2>
 {_yearly_table(results)}

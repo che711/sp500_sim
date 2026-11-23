@@ -130,3 +130,61 @@ def web_manual(project):
     executor = ManualExecutor()
     with _make_client(executor) as client:
         yield client, executor
+
+
+def _stock(prices, factor, shift=0, drop_first=0):
+    """Другая «бумага»: те же даты и похожая динамика, но своя цена."""
+    frame = prices.copy()
+    frame[["Open", "High", "Low", "Close"]] *= factor
+    frame[["Open", "High", "Low", "Close"]] *= 1 + shift * np.linspace(0, 1, len(frame))[:, None]
+    return frame.iloc[drop_first:]
+
+
+@pytest.fixture
+def stocks(prices):
+    """Три бумаги: AAA и BBB торгуются весь период, CCC появилась на 200 дней позже."""
+    return {
+        "AAA": _stock(prices, 1.5, shift=0.4),
+        "BBB": _stock(prices, 0.7, shift=-0.2),
+        "CCC": _stock(prices, 2.0, shift=0.1, drop_first=200),
+    }
+
+
+PORTFOLIO_CONFIG = """
+[data]
+ticker = "TEST"
+start = "2020-01-01"
+end = "2022-01-01"
+cache_dir = "data"
+
+[[strategies]]
+name = "Мой портфель"
+type = "buy_and_hold"
+portfolio = {{ AAA = 60, BBB = 40 }}
+rebalance = "yearly"
+
+[[strategies]]
+name = "Только TEST"
+type = "buy_and_hold"
+"""
+
+
+@pytest.fixture
+def portfolio_project(tmp_path, monkeypatch, prices, stocks):
+    """Рабочая папка с кэшем цен для TEST и трёх бумаг портфеля, интернет не нужен."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text(PORTFOLIO_CONFIG.format(), encoding="utf-8")
+    for ticker, frame in {"TEST": prices, **stocks}.items():
+        cache = cache_file(
+            DataConfig(ticker=ticker, start="2020-01-01", end="2022-01-01"),
+        )
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        frame.to_csv(cache, index_label="Date")
+    return tmp_path
+
+
+@pytest.fixture
+def web_portfolio(portfolio_project):
+    """Сайт с готовым кэшем цен для портфеля из нескольких бумаг."""
+    with _make_client(InlineExecutor()) as client:
+        yield client

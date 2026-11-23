@@ -14,7 +14,7 @@ import pandas as pd
 from .engine import TRADE_COLUMNS, RunResult
 from .errors import SimError
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 STATUS_RUNNING = "running"
 STATUS_DONE = "done"
@@ -71,7 +71,8 @@ CREATE TABLE IF NOT EXISTS trades (
     side      TEXT NOT NULL,
     qty       REAL NOT NULL,
     price     REAL NOT NULL,
-    fee       REAL NOT NULL
+    fee       REAL NOT NULL,
+    ticker    TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS trades_by_run ON trades (run_id, strategy);
 """
@@ -102,6 +103,15 @@ ALTER TABLE runs_new RENAME TO runs;
 """
 
 
+# Версия 2 -> 3: в сделках появился тикер (портфель из нескольких бумаг). У старых прогонов
+# была одна бумага, её тикер берётся из самого прогона.
+MIGRATION_2_TO_3 = """
+ALTER TABLE trades ADD COLUMN ticker TEXT NOT NULL DEFAULT '';
+UPDATE trades SET ticker = COALESCE(
+    (SELECT ticker FROM runs WHERE runs.id = trades.run_id), '');
+"""
+
+
 @dataclass(frozen=True)
 class RunMeta:
     """Что нужно знать, чтобы воспроизвести прогон: когда, на каком коде и на каких данных."""
@@ -126,18 +136,21 @@ class StoredRun:
 
 def _migrate(conn: sqlite3.Connection) -> None:
     version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if version >= SCHEMA_VERSION:
+        return
     has_runs = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'runs'"
     ).fetchone()
-    if version >= SCHEMA_VERSION:
-        return
-    if has_runs:  # база создана старой версией программы
-        # Во время пересоздания таблицы внешние ключи должны быть выключены
-        conn.execute("PRAGMA foreign_keys = OFF")
-        try:
-            conn.executescript("BEGIN;" + MIGRATION_1_TO_2 + "COMMIT;")
-        finally:
-            conn.execute("PRAGMA foreign_keys = ON")
+    if has_runs:  # база создана одной из прошлых версий программы
+        if version < 2:
+            # Во время пересоздания таблицы внешние ключи должны быть выключены
+            conn.execute("PRAGMA foreign_keys = OFF")
+            try:
+                conn.executescript("BEGIN;" + MIGRATION_1_TO_2 + "COMMIT;")
+            finally:
+                conn.execute("PRAGMA foreign_keys = ON")
+        if version < 3:
+            conn.executescript("BEGIN;" + MIGRATION_2_TO_3 + "COMMIT;")
     conn.executescript(SCHEMA)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
@@ -181,9 +194,19 @@ def _write_results(conn: sqlite3.Connection, run_id: int, results: list[RunResul
             ((run_id, r.name, day.strftime("%Y-%m-%d"), float(v)) for day, v in r.equity.items()),
         )
         conn.executemany(
-            "INSERT INTO trades VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO trades (run_id, strategy, date, ticker, side, qty, price, fee)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                (run_id, r.name, t.date.strftime("%Y-%m-%d"), t.side, t.qty, t.price, t.fee)
+                (
+                    run_id,
+                    r.name,
+                    t.date.strftime("%Y-%m-%d"),
+                    t.ticker,
+                    t.side,
+                    t.qty,
+                    t.price,
+                    t.fee,
+                )
                 for t in r.trades.itertuples(index=False)
             ),
         )
@@ -235,11 +258,12 @@ def finish_run(
 ) -> None:
     with conn:
         cur = conn.execute(
-            "UPDATE runs SET git_commit = ?, data_start = ?, data_end = ?, data_rows = ?,"
-            " data_hash = ?, data_fetched_at = ?, status = ?, error = NULL"
+            "UPDATE runs SET git_commit = ?, ticker = ?, data_start = ?, data_end = ?,"
+            " data_rows = ?, data_hash = ?, data_fetched_at = ?, status = ?, error = NULL"
             " WHERE id = ? AND status = ?",
             (
                 meta.git_commit,
+                meta.ticker,
                 meta.data_start,
                 meta.data_end,
                 meta.data_rows,
@@ -331,7 +355,7 @@ def load_run(conn: sqlite3.Connection, run_id: int) -> StoredRun:
             parse_dates=["date"],
         )
         trades = pd.read_sql_query(
-            "SELECT date, side, qty, price, fee FROM trades"
+            "SELECT date, ticker, side, qty, price, fee FROM trades"
             " WHERE run_id = ? AND strategy = ? ORDER BY rowid",
             conn,
             params=(run_id, name),

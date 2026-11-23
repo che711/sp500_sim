@@ -26,16 +26,31 @@
 
 {% macro strategy_row(row, error="") %}
 <div class="srow">
-  <select name="strategy_type" aria-label="Стратегия">
-    {% for s in catalog %}
-    <option value="{{ s.type }}" {% if s.type == row.type %}selected{% endif %}>{{ s.type }}</option>
-    {% endfor %}
-  </select>
-  <input type="text" name="strategy_name" value="{{ row.name }}" placeholder="Название (необязательно)"
-         aria-label="Название">
-  <input type="text" name="strategy_params" value="{{ row.params }}" placeholder="Параметры: n=200"
-         aria-label="Параметры" {% if error %}class="invalid"{% endif %}>
-  <button type="button" class="btn remove" title="Убрать стратегию" aria-label="Убрать">×</button>
+  <div class="srow-main">
+    <select name="strategy_type" aria-label="Стратегия">
+      {% for s in catalog %}
+      <option value="{{ s.type }}" {% if s.type == row.type %}selected{% endif %}>{{ s.type }}</option>
+      {% endfor %}
+    </select>
+    <input type="text" name="strategy_name" value="{{ row.name }}" placeholder="Название (необязательно)"
+           aria-label="Название">
+    <input type="color" class="color-input" name="strategy_color" value="{{ row.color or '#7d6fe0' }}"
+           title="Цвет линии и плитки" aria-label="Цвет">
+    <button type="button" class="btn remove" title="Убрать стратегию" aria-label="Убрать">×</button>
+  </div>
+  <div class="srow-extra">
+    <input type="text" name="strategy_params" value="{{ row.params }}" placeholder="Параметры: n=200"
+           aria-label="Параметры" {% if error %}class="invalid"{% endif %}>
+    <input type="text" name="strategy_portfolio" value="{{ row.portfolio }}"
+           placeholder="Портфель: AAPL 40, MSFT 60 (пусто: тикер из «Данные»)"
+           title="Тикеры с весами в процентах. Без весов бумаги берутся поровну."
+           aria-label="Портфель">
+    <select name="strategy_rebalance" aria-label="Ребалансировка" title="Как часто возвращать веса к целевым">
+      {% for key, label in rebalance_modes.items() %}
+      <option value="{{ key }}" {% if key == (row.rebalance or "never") %}selected{% endif %}>Ребаланс: {{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
   {% if error %}<span class="error">{{ error }}</span>{% endif %}
 </div>
 {% endmacro %}
@@ -57,7 +72,7 @@
       <section class="card">
         <h3>Данные</h3>
         <div class="fields">
-          {{ field("ticker", "Тикер", v.ticker, "", "text", wide=True) }}
+          {{ field("ticker", "Тикер", v.ticker, "его торгуют стратегии без своего портфеля", "text", wide=True) }}
           <div class="wide chips">
             <button type="button" class="chip" data-ticker="SPY">SPY</button>
             <button type="button" class="chip" data-ticker="^GSPC">^GSPC</button>
@@ -86,7 +101,10 @@
 
     <section class="card">
       <h3>Стратегии</h3>
-      <p class="hint">До {{ max_strategies }}. Параметры пишутся через запятую: <code>n=200</code>.</p>
+      <p class="hint">До {{ max_strategies }}. Параметры пишутся через запятую: <code>n=200</code>.
+        Цвет задаёт линию на графиках и плитку в отчёте.
+        В поле «Портфель» можно собрать свои бумаги: <code>AAPL 40, MSFT 30, SPY 30</code>
+        (проценты, в сумме 100) или просто <code>AAPL, MSFT, SPY</code> (поровну).</p>
       <div id="rows">
         {% for row in v.strategies %}
         {{ strategy_row(row, errors.get("strategy." ~ loop.index0, "")) }}
@@ -131,8 +149,13 @@
   const rows = $("rows");
   const template = $("row-template");
   const maxRows = {{ max_strategies }};
+  const palette = {{ palette | tojson }};
   $("add").addEventListener("click", () => {
-    if (rows.children.length < maxRows) rows.appendChild(template.content.cloneNode(true));
+    if (rows.children.length >= maxRows) return;
+    const row = template.content.cloneNode(true);
+    // Новая строка получает следующий цвет из палитры
+    row.querySelector(".color-input").value = palette[rows.children.length % palette.length];
+    rows.appendChild(row);
   });
   rows.addEventListener("click", (event) => {
     if (event.target.classList.contains("remove")) event.target.closest(".srow").remove();
