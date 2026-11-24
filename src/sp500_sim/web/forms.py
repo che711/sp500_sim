@@ -9,12 +9,14 @@ from __future__ import annotations
 import inspect
 import json
 import math
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from itertools import zip_longest
 from typing import Any
 
-from ..config import Config, collect_config, parse_config
+from ..config import MAX_PORTFOLIO_ASSETS, Config, collect_config, parse_config
+from ..report import PALETTES
 from ..strategies import REGISTRY
 
 MAX_STRATEGIES = 6
@@ -24,11 +26,20 @@ MAX_PARAMS_LENGTH = 200
 PERCENT_LIMITS = {"commission": 10, "slippage": 10, "min_change": 100}
 
 
+def default_color(index: int) -> str:
+    """Цвет строки стратегии по умолчанию: тот же, что в палитре отчёта."""
+    palette = PALETTES["light"]
+    return palette[index % len(palette)]
+
+
 @dataclass
 class StrategyRow:
     type: str = ""
     name: str = ""
     params: str = ""
+    color: str = ""
+    portfolio: str = ""  # «AAPL 40, MSFT 60»; пусто - бумага из раздела «Данные»
+    rebalance: str = ""  # пусто - как в настройках по умолчанию (never)
 
 
 @dataclass
@@ -54,8 +65,15 @@ class FormValues:
             slippage=_percent(config.broker.slippage),
             min_change=_percent(config.broker.min_change),
             strategies=[
-                StrategyRow(type=s.type, name=s.name, params=format_params(s.params))
-                for s in config.strategies
+                StrategyRow(
+                    type=s.type,
+                    name=s.name,
+                    params=format_params(s.params),
+                    color=s.color or default_color(i),
+                    portfolio=format_portfolio(s.portfolio),
+                    rebalance=s.rebalance,
+                )
+                for i, s in enumerate(config.strategies)
             ],
         )
 
@@ -68,6 +86,9 @@ class FormValues:
             form.getlist("strategy_type"),
             form.getlist("strategy_name"),
             form.getlist("strategy_params"),
+            form.getlist("strategy_color"),
+            form.getlist("strategy_portfolio"),
+            form.getlist("strategy_rebalance"),
             fillvalue="",
         )
         return cls(
@@ -79,9 +100,7 @@ class FormValues:
             slippage=text("slippage"),
             min_change=text("min_change"),
             refresh=form.get("refresh") is not None,
-            strategies=[
-                StrategyRow(str(t).strip(), str(n).strip(), str(p).strip()) for t, n, p in rows
-            ],
+            strategies=[StrategyRow(*(str(x).strip() for x in row)) for row in rows],
         )
 
 
@@ -115,6 +134,40 @@ def parse_params(text: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             params[key] = value
     return params
+
+
+def format_portfolio(portfolio: Mapping[str, float] | None) -> str:
+    return ", ".join(f"{t} {w:.6g}" for t, w in portfolio.items()) if portfolio else ""
+
+
+_PORTFOLIO_ITEM = re.compile(r"([A-Za-z0-9.^=_-]+)(?:\s*[:\s]\s*(\d+(?:[.,]\d+)?)\s*%?)?")
+
+
+def parse_portfolio(text: str) -> dict[str, float]:
+    """'AAPL 40, MSFT 60' -> {'AAPL': 40.0, 'MSFT': 60.0}. Без весов ('AAPL, MSFT') все бумаги
+    получают поровну. Тикеры отделяются запятой, точкой с запятой или переводом строки."""
+    parts = [p.strip() for p in re.split(r"[,;\n]+", text) if p.strip()]
+    if not parts:
+        return {}
+    if len(parts) > MAX_PORTFOLIO_ASSETS:
+        raise ValueError(f"в портфеле не больше {MAX_PORTFOLIO_ASSETS} бумаг")
+    items: list[tuple[str, str | None]] = []
+    for part in parts:
+        if re.fullmatch(r"\d+(\.\d+)?%?", part):
+            raise ValueError("дробный вес пишется через точку (33.5), а бумаги разделяются запятой")
+        match = _PORTFOLIO_ITEM.fullmatch(part)
+        if not match:
+            raise ValueError("пишите так: AAPL 40, MSFT 30, SPY 30 или просто AAPL, MSFT")
+        items.append((match.group(1).upper(), match.group(2)))
+    tickers = [t for t, _ in items]
+    if len(set(tickers)) != len(tickers):
+        raise ValueError("тикер указан дважды")
+    given = [w for _, w in items if w is not None]
+    if not given:
+        return {t: 100 / len(tickers) for t in tickers}  # поровну
+    if len(given) != len(items):
+        raise ValueError("вес нужно указать у всех бумаг или ни у одной (тогда поровну)")
+    return {t: float(w.replace(",", ".")) for t, w in items}  # type: ignore[union-attr]
 
 
 def _number(text: str, name: str, errors: dict[str, str]) -> float | None:
@@ -161,10 +214,21 @@ def parse_form(
         item: dict[str, Any] = {"type": row.type}
         if row.name:
             item["name"] = row.name
+        if row.color:
+            item["color"] = row.color
         try:
             item.update(parse_params(row.params))
         except ValueError as exc:
             errors[f"strategy.{i}"] = str(exc)
+        try:
+            portfolio = parse_portfolio(row.portfolio)
+        except ValueError as exc:
+            errors.setdefault(f"strategy.{i}", f"портфель: {exc}")
+        else:
+            if portfolio:
+                item["portfolio"] = portfolio
+        if row.rebalance:
+            item["rebalance"] = row.rebalance
         raw["strategies"].append(item)
 
     config, config_errors = collect_config(raw)
@@ -215,9 +279,15 @@ def config_from_api(
 def config_from_stored(stored: dict[str, Any]) -> Config:
     """Настройки из сохранённого прогона (для кнопки «повторить с этими настройками»).
     В базе параметры стратегии лежат во вложенном поле params, а при чтении они плоские."""
-    strategies = [
-        {"name": s["name"], "type": s["type"], **s["params"]} for s in stored["strategies"]
-    ]
+    strategies = []
+    for s in stored["strategies"]:
+        item = {"name": s["name"], "type": s["type"], **s["params"]}
+        if s.get("color"):  # в прогонах, сохранённых раньше, цвета нет
+            item["color"] = s["color"]
+        if s.get("portfolio"):  # и портфеля тоже
+            item["portfolio"] = s["portfolio"]
+            item["rebalance"] = s.get("rebalance", "never")
+        strategies.append(item)
     return parse_config({**stored, "strategies": strategies})
 
 

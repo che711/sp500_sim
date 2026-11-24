@@ -1,8 +1,9 @@
-"""Брокер: решает, по какой цене и сколько реально купить или продать."""
+"""Брокер: решает, по каким ценам и сколько реально купить или продать."""
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 
 import pandas as pd
 
@@ -17,26 +18,43 @@ class Broker:
         self.slippage = slippage
         self.min_change = min_change
 
-    def execute(
-        self, pf: Portfolio, date: pd.Timestamp, target_weight: float, open_price: float
+    def rebalance(
+        self,
+        pf: Portfolio,
+        date: pd.Timestamp,
+        targets: Mapping[str, float],
+        opens: Mapping[str, float],
     ) -> None:
-        """Приводит долю акций в портфеле к желаемой. Исполнение по цене открытия."""
-        total = pf.value(open_price)
-        if abs(target_weight - pf.weight(open_price)) <= self.min_change:
-            return
+        """Приводит доли бумаг в портфеле к целевым (доля от всего портфеля, остальное деньги).
+        Исполнение по ценам открытия. Сначала продажи, потом покупки на вырученные деньги."""
+        total = pf.value(opens)
+        sells: dict[str, float] = {}
+        buys: dict[str, float] = {}
+        for ticker, target in targets.items():
+            if abs(target - pf.weight(ticker, opens)) <= self.min_change:
+                continue  # слишком мелкое изменение, не торгуем
+            delta = target * total / opens[ticker] - pf.positions.get(ticker, 0.0)
+            if delta > 0:
+                buys[ticker] = delta
+            else:
+                sells[ticker] = -delta
 
-        delta = target_weight * total / open_price - pf.shares  # >0 купить, <0 продать
-        if delta > 0:
-            price = open_price * (1 + self.slippage)
-            qty = min(delta, pf.cash / (price * (1 + self.commission)))
+        for ticker, qty in sells.items():
+            qty = min(qty, pf.positions.get(ticker, 0.0))
             if qty <= 0:
-                return
-            pf.buy(date, qty, price, qty * price * self.commission)
-            log.debug("%s BUY %.4f по %.4f", date.date(), qty, price)
-        else:
-            price = open_price * (1 - self.slippage)
-            qty = min(-delta, pf.shares)
+                continue
+            price = opens[ticker] * (1 - self.slippage)
+            pf.sell(date, ticker, qty, price, qty * price * self.commission)
+            log.debug("%s SELL %s %.4f по %.4f", date.date(), ticker, qty, price)
+
+        # Если денег не хватает (комиссии и проскальзывание), все покупки уменьшаются поровну
+        cost = {t: opens[t] * (1 + self.slippage) * (1 + self.commission) for t in buys}
+        need = sum(qty * cost[t] for t, qty in buys.items())
+        scale = min(1.0, pf.cash / need) if need > 0 else 1.0
+        for ticker, qty in buys.items():
+            qty *= scale
             if qty <= 0:
-                return
-            pf.sell(date, qty, price, qty * price * self.commission)
-            log.debug("%s SELL %.4f по %.4f", date.date(), qty, price)
+                continue
+            price = opens[ticker] * (1 + self.slippage)
+            pf.buy(date, ticker, qty, price, qty * price * self.commission)
+            log.debug("%s BUY %s %.4f по %.4f", date.date(), ticker, qty, price)

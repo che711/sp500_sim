@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -30,9 +30,9 @@ class PriceData:
     source: str  # путь к файлу кэша
 
 
-def cache_file(cfg: DataConfig) -> Path:
+def cache_file(cfg: DataConfig, ticker: str | None = None) -> Path:
     """Файл кэша зависит от тикера и периода: другой период - другой файл."""
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", cfg.ticker)
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", ticker or cfg.ticker)
     return Path(cfg.cache_dir) / f"{safe}_{cfg.start}_{cfg.end or 'latest'}.csv"
 
 
@@ -93,3 +93,46 @@ def load_prices(cfg: DataConfig, refresh: bool = False) -> PriceData:
         fetched = datetime.now(UTC)
         log.info("Сохранил цены в %s", path)
     return PriceData(df=df, fetched_at=fetched.isoformat(timespec="seconds"), source=str(path))
+
+
+def load_many(cfg: DataConfig, tickers: list[str], refresh: bool = False) -> dict[str, PriceData]:
+    """Цены нескольких бумаг за период из cfg (сам cfg.ticker здесь не используется)."""
+    return {t: load_prices(replace(cfg, ticker=t), refresh=refresh) for t in tickers}
+
+
+def align(frames: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    """Оставляет только дни, когда торговались все бумаги сразу.
+
+    Портфель нельзя считать по дням, где у какой-то бумаги нет цены. Из-за этого период
+    сжимается до истории самой молодой бумаги, об этом пишется в лог."""
+    if len(frames) == 1:
+        return frames
+    common = None
+    for df in frames.values():
+        common = df.index if common is None else common.intersection(df.index)
+    if common is None or len(common) < 2:
+        raise DataError("У этих бумаг нет общих торговых дней: не из чего собрать портфель")
+    firsts = {t: df.index[0] for t, df in frames.items()}
+    youngest = max(firsts, key=lambda t: firsts[t])
+    if firsts[youngest] > min(firsts.values()):
+        log.warning(
+            "Период начинается с %s: раньше нет данных по %s",
+            firsts[youngest].date(),
+            youngest,
+        )
+    return {t: df.loc[common] for t, df in frames.items()}
+
+
+def fingerprint_many(frames: dict[str, pd.DataFrame]) -> dict[str, str | int]:
+    """Отпечаток набора бумаг: по нему видно, что прогоны шли на одних и тех же ценах."""
+    parts = {t: fingerprint(df) for t, df in frames.items()}
+    first = next(iter(parts.values()))
+    if len(parts) == 1:
+        return first
+    joined = "|".join(f"{t}:{p['hash']}" for t, p in parts.items())
+    return {
+        "rows": first["rows"],
+        "start": first["start"],
+        "end": first["end"],
+        "hash": hashlib.sha256(joined.encode()).hexdigest()[:16],
+    }

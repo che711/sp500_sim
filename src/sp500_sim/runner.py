@@ -7,9 +7,9 @@ import subprocess
 from datetime import UTC, datetime
 
 from .broker import Broker
-from .config import Config
-from .data import fingerprint, load_prices
-from .engine import RunResult, run_strategy
+from .config import Config, StrategyConfig, needed_tickers
+from .data import align, fingerprint_many, load_many
+from .engine import RunResult, run_portfolio
 from .storage import RunMeta
 from .strategies import REGISTRY
 
@@ -38,9 +38,20 @@ def git_commit() -> str | None:
     return sha + ("+dirty" if dirty else "")
 
 
+def strategy_weights(sc: StrategyConfig, config: Config) -> dict[str, float]:
+    """Доли бумаг стратегии (в сумме 1). Без своего портфеля - бумага из раздела [data]."""
+    if not sc.portfolio:
+        return {config.data.ticker: 1.0}
+    total = sum(sc.portfolio.values())
+    return {ticker: weight / total for ticker, weight in sc.portfolio.items()}
+
+
 def execute(config: Config, refresh: bool = False) -> tuple[RunMeta, list[RunResult]]:
-    prices = load_prices(config.data, refresh=refresh)
-    fp = fingerprint(prices.df)
+    tickers = needed_tickers(config.data, config.strategies)
+    loaded = load_many(config.data, tickers, refresh=refresh)
+    # Все стратегии считаются на одном и том же периоде, иначе их нельзя сравнивать
+    frames = align({t: p.df for t, p in loaded.items()})
+    fp = fingerprint_many(frames)
     broker = Broker(
         commission=config.broker.commission,
         slippage=config.broker.slippage,
@@ -49,17 +60,28 @@ def execute(config: Config, refresh: bool = False) -> tuple[RunMeta, list[RunRes
 
     results = []
     for sc in config.strategies:
+        weights = strategy_weights(sc, config)
         strategy = REGISTRY[sc.type](**sc.params)
-        results.append(run_strategy(prices.df, strategy, sc.name, config.run.cash, broker))
+        results.append(
+            run_portfolio(
+                {t: frames[t] for t in weights},
+                weights,
+                strategy,
+                sc.name,
+                config.run.cash,
+                broker,
+                sc.rebalance,
+            )
+        )
 
     meta = RunMeta(
         created_at=datetime.now(UTC).isoformat(timespec="seconds"),
         git_commit=git_commit(),
-        ticker=config.data.ticker,
+        ticker=", ".join(tickers),
         data_start=str(fp["start"]),
         data_end=str(fp["end"]),
         data_rows=int(fp["rows"]),
         data_hash=str(fp["hash"]),
-        data_fetched_at=prices.fetched_at,
+        data_fetched_at=min(p.fetched_at for p in loaded.values()),
     )
     return meta, results

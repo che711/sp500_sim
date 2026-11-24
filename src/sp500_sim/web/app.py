@@ -19,10 +19,10 @@ from fastapi.templating import Jinja2Templates
 
 from .. import service, storage
 from ..compare import config_diff
-from ..config import Config, default_config
+from ..config import REBALANCE_MODES, Config, default_config
 from ..errors import SimError
 from ..metrics import fmt_money, fmt_pct
-from ..report import HIGHER_IS_BETTER, build_body, build_html
+from ..report import HIGHER_IS_BETTER, PALETTES, build_body, build_html
 from ..storage import RunNotFinishedError, StorageError
 from ..theme import CSS, FAVICON, HEAD_JS, LOGO_SVG, TOGGLE_JS
 from .forms import (
@@ -142,6 +142,8 @@ def create_app(
             "errors": errors,
             "catalog": strategy_catalog(),
             "max_strategies": MAX_STRATEGIES,
+            "palette": PALETTES["light"],
+            "rebalance_modes": REBALANCE_MODES,
             "active": "new",
         }
         return templates.TemplateResponse(request, "form.html", context, status_code=status_code)

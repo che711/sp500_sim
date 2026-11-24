@@ -23,8 +23,17 @@ dir = "results"         # здесь лежат база results.db и HTML-от
 [[strategies]]
 name = "Купить и держать"
 type = "buy_and_hold"
+# color = "#7d6fe0"     # цвет линии и плитки в отчёте (необязательно)
 
 [[strategies]]
 name = "Тренд SMA-200"
 type = "sma_trend"
 n = 200                 # длина скользящей средней в днях
+
+# Портфель из своих бумаг. Веса в процентах, в сумме 100. rebalance - как часто возвращать
+# веса к целевым: never (по умолчанию), monthly, quarterly, yearly.
+# [[strategies]]
+# name = "Мой портфель"
+# type = "buy_and_hold"
+# portfolio = { AAPL = 40, MSFT = 30, KO = 30 }
+# rebalance = "yearly"

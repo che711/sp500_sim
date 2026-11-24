@@ -303,3 +303,138 @@ def test_run_page_embeds_report_in_the_site_theme(web):
     assert page.count('id="theme-toggle"') == 1  # переключатель один, не два
     assert page.count('<div class="kpi tile-') == 2
     assert "Повторить с этими настройками" in page
+
+
+# ----------------------------------------------------------------------- цвета
+
+
+def test_form_color_is_saved_and_used_in_report(web):
+    web.post("/runs", data={**FORM, "strategy_color": ["#ff0000", "#00aa55"]})
+    report = web.get("/runs/1/report").text
+    assert "linear-gradient(135deg,#ff0000" in report
+    assert "linear-gradient(135deg,#00aa55" in report
+
+
+def test_form_without_colors_uses_palette(web):
+    web.post("/runs", data=FORM)
+    assert 'class="kpi tile-0"' in web.get("/runs/1/report").text
+
+
+def test_form_offers_color_pickers_and_keeps_chosen_color(web):
+    page = web.get("/").text
+    assert page.count('type="color"') == 3  # две строки и шаблон новой строки
+    assert 'value="#7d6fe0"' in page  # цвет первой стратегии из палитры
+    web.post("/runs", data={**FORM, "strategy_color": ["#123456", "#abcdef"]})
+    page = web.get("/", params={"from_run": 1}).text
+    assert 'value="#123456"' in page and 'value="#abcdef"' in page
+
+
+def test_bad_color_in_form_shows_error(web):
+    response = web.post("/runs", data={**FORM, "strategy_color": ["красный", "#abcdef"]})
+    assert response.status_code == 422
+    assert "#rrggbb" in response.text
+
+
+def test_api_accepts_color(web):
+    config = {
+        **API_CONFIG,
+        "strategies": [
+            {**API_CONFIG["strategies"][0], "color": "#ff0000"},
+            API_CONFIG["strategies"][1],
+        ],
+    }
+    assert web.post("/api/runs", json=config).status_code == 202
+    assert "linear-gradient(135deg,#ff0000" in web.get("/runs/1/report").text
+    assert web.get("/api/runs/1").json()["config"]["strategies"][0]["color"] == "#ff0000"
+
+    bad = {**API_CONFIG, "strategies": [{"type": "buy_and_hold", "color": "red"}]}
+    response = web.post("/api/runs", json=bad)
+    assert response.status_code == 422 and "#rrggbb" in response.json()["errors"][0]
+
+
+# ------------------------------------------------------------------ портфели
+
+
+PORTFOLIO_FORM = {
+    "ticker": "TEST",
+    "start": "2020-01-01",
+    "end": "2022-01-01",
+    "cash": "10000",
+    "commission": "0.05",
+    "slippage": "0.05",
+    "min_change": "1",
+    "strategy_type": ["buy_and_hold", "buy_and_hold"],
+    "strategy_name": ["Мой портфель", "Только TEST"],
+    "strategy_params": ["", ""],
+    "strategy_portfolio": ["AAA 60, BBB 40", ""],
+    "strategy_rebalance": ["yearly", "never"],
+}
+
+
+def test_form_builds_portfolio_run(web_portfolio):
+    assert web_portfolio.post("/runs", data=PORTFOLIO_FORM).status_code == 303
+    info = web_portfolio.get("/api/runs/1").json()
+    assert info["status"] == "done"
+    assert info["ticker"] == "AAA, BBB, TEST"
+    assert info["config"]["strategies"][0]["portfolio"] == {"AAA": 60.0, "BBB": 40.0}
+    page = web_portfolio.get("/runs/1").text
+    assert "AAA 60% · BBB 40%" in page
+    assert "AAA, BBB, TEST" in page
+
+
+def test_form_shows_portfolio_error_in_row(web_portfolio):
+    bad = {**PORTFOLIO_FORM, "strategy_portfolio": ["AAA 60, BBB 30", ""]}
+    response = web_portfolio.post("/runs", data=bad)
+    assert response.status_code == 422
+    assert "100%, сейчас 90%" in response.text
+    assert 'value="AAA 60, BBB 30"' in response.text  # введённое не пропало
+    assert web_portfolio.get("/api/runs").json() == []
+
+
+def test_equal_weights_when_none_given(web_portfolio):
+    data = {**PORTFOLIO_FORM, "strategy_portfolio": ["AAA, BBB", ""]}
+    web_portfolio.post("/runs", data=data)
+    weights = web_portfolio.get("/api/runs/1").json()["config"]["strategies"][0]["portfolio"]
+    assert weights == pytest.approx({"AAA": 50.0, "BBB": 50.0})
+
+
+def test_form_prefills_portfolio_from_a_previous_run(web_portfolio):
+    web_portfolio.post("/runs", data=PORTFOLIO_FORM)
+    page = web_portfolio.get("/", params={"from_run": 1}).text
+    assert 'value="AAA 60, BBB 40"' in page
+    assert 'value="yearly" selected' in page
+
+
+def test_form_has_portfolio_and_rebalance_fields(web_portfolio):
+    page = web_portfolio.get("/").text
+    assert 'name="strategy_portfolio"' in page
+    assert "Ребаланс: раз в год" in page
+
+
+def test_api_accepts_portfolio(web_portfolio):
+    config = {
+        "data": {"ticker": "TEST", "start": "2020-01-01", "end": "2022-01-01"},
+        "strategies": [
+            {
+                "name": "p",
+                "type": "buy_and_hold",
+                "portfolio": {"AAA": 50, "BBB": 50},
+                "rebalance": "monthly",
+            }
+        ],
+    }
+    assert web_portfolio.post("/api/runs", json=config).status_code == 202
+    assert web_portfolio.get("/api/runs/1").json()["status"] == "done"
+
+    bad = {**config, "strategies": [{**config["strategies"][0], "portfolio": {"AAA": 10}}]}
+    response = web_portfolio.post("/api/runs", json=bad)
+    assert response.status_code == 422 and "100%" in response.json()["errors"][0]
+
+
+def test_api_limits_total_tickers(web_portfolio):
+    strategies = [
+        {"name": f"s{i}", "type": "buy_and_hold", "portfolio": {f"T{i}{j}": 25 for j in range(4)}}
+        for i in range(6)
+    ]
+    response = web_portfolio.post("/api/runs", json={"strategies": strategies})
+    assert response.status_code == 422
