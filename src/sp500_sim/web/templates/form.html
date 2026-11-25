@@ -55,6 +55,19 @@
 </div>
 {% endmacro %}
 
+{% macro holding_row(row, error="") %}
+<div class="hrow">
+  <input type="text" name="holding_ticker" value="{{ row.ticker }}" placeholder="Тикер: AAPL"
+         aria-label="Тикер" autocomplete="off" spellcheck="false" {% if error %}class="invalid"{% endif %}>
+  <input type="text" name="holding_qty" value="{{ row.qty }}" placeholder="Штук" inputmode="decimal"
+         aria-label="Сколько акций" {% if error %}class="invalid"{% endif %}>
+  <input type="text" name="holding_value" value="{{ row.value }}" placeholder="Стоимость позиции"
+         inputmode="decimal" aria-label="Стоимость всей позиции сейчас" {% if error %}class="invalid"{% endif %}>
+  <button type="button" class="btn remove" title="Убрать" aria-label="Убрать">×</button>
+  {% if error %}<span class="error">{{ error }}</span>{% endif %}
+</div>
+{% endmacro %}
+
 {% block content %}
 <section class="card hero">
   <h1>Новый прогон</h1>
@@ -99,6 +112,28 @@
       </section>
     </div>
 
+    <div>
+    <section class="card">
+      <h3>Мой портфель</h3>
+      <p class="hint">Ваши акции: тикер, сколько штук и сколько сейчас стоит вся позиция (как в вашем
+        приложении). Я покажу, как менялась бы стоимость этих позиций раньше, рядом со стратегиями.
+        Не нужен: оставьте пустым.</p>
+      <div id="holdings">
+        {% for row in (v.holdings or [{"ticker": "", "qty": "", "value": ""}]) %}
+        {{ holding_row(row, errors.get("holding." ~ loop.index0, "")) }}
+        {% endfor %}
+      </div>
+      <template id="holding-template">{{ holding_row({"ticker": "", "qty": "", "value": ""}) }}</template>
+      <div class="holding-tools">
+        <button type="button" class="btn btn-small" id="add-holding">+ Добавить акцию</button>
+        <label class="check">Цвет линии
+          <input type="color" class="color-input" name="portfolio_color"
+                 value="{{ v.portfolio_color or palette[0] }}" aria-label="Цвет портфеля">
+        </label>
+      </div>
+      {% if errors.get("portfolio_color") %}<span class="error">{{ errors["portfolio_color"] }}</span>{% endif %}
+    </section>
+
     <section class="card">
       <h3>Стратегии</h3>
       <p class="hint">До {{ max_strategies }}. Параметры пишутся через запятую: <code>n=200</code>.
@@ -123,6 +158,7 @@
         {% endfor %}
       </div>
     </section>
+    </div>
   </div>
 
   <div class="submit-bar">
@@ -145,6 +181,14 @@
       $("start").value = date.toISOString().slice(0, 10);
       $("end").value = "";
     }));
+
+  const holdings = $("holdings");
+  $("add-holding").addEventListener("click", () => {
+    holdings.appendChild($("holding-template").content.cloneNode(true));
+  });
+  holdings.addEventListener("click", (event) => {
+    if (event.target.classList.contains("remove")) event.target.closest(".hrow").remove();
+  });
 
   const rows = $("rows");
   const template = $("row-template");

@@ -78,7 +78,9 @@ def test_end_before_start():
 def test_strategy_rows():
     values = _values()
     values.strategies = []
-    assert parse_form(values, **DIRS)[1] == {"form": "Добавьте хотя бы одну стратегию"}
+    assert parse_form(values, **DIRS)[1] == {
+        "form": "Добавьте хотя бы одну стратегию или позицию портфеля"
+    }
 
     values.strategies = [StrategyRow("buy_and_hold", f"s{i}") for i in range(MAX_STRATEGIES + 1)]
     assert "form" in parse_form(values, **DIRS)[1]
@@ -287,3 +289,99 @@ def test_portfolio_survives_store_and_read_back_and_form_roundtrip():
     assert row.portfolio == "AAPL 25, MSFT 75" and row.rebalance == "yearly"
     parsed, errors = parse_form(FormValues.from_config(config), **DIRS)
     assert errors == {} and parsed.strategies[0].portfolio == {"AAPL": 25.0, "MSFT": 75.0}
+
+
+# ------------------------------------------------------------ мой портфель
+
+
+def _holdings_values(*rows, color="", with_strategies=True):
+    from sp500_sim.web.forms import HoldingRow
+
+    values = _values()
+    values.holdings = [HoldingRow(*row) for row in rows]
+    values.portfolio_color = color
+    if not with_strategies:
+        values.strategies = []
+    return values
+
+
+def test_holdings_from_form_reach_config():
+    values = _holdings_values(("aapl", "10", "1900"), ("MSFT", "5,5", "2100,50"))
+    config, errors = parse_form(values, **DIRS)
+    assert errors == {}
+    positions = config.my_portfolio.positions
+    assert [(p.ticker, p.qty, p.value) for p in positions] == [
+        ("AAPL", 10.0, 1900.0),
+        ("MSFT", 5.5, 2100.5),  # запятая как десятичный знак принимается
+    ]
+
+
+def test_empty_holding_rows_are_ignored():
+    config, errors = parse_form(_holdings_values(("", "", ""), ("AAPL", "1", "100")), **DIRS)
+    assert errors == {} and len(config.my_portfolio.positions) == 1
+    config, errors = parse_form(_holdings_values(("", "", "")), **DIRS)
+    assert errors == {} and config.my_portfolio is None
+
+
+def test_portfolio_color_from_form():
+    config, errors = parse_form(_holdings_values(("AAPL", "1", "100"), color="#ff8800"), **DIRS)
+    assert errors == {} and config.my_portfolio.color == "#ff8800"
+    _, errors = parse_form(_holdings_values(("AAPL", "1", "100"), color="оранжевый"), **DIRS)
+    assert "#rrggbb" in errors["portfolio_color"]
+
+
+@pytest.mark.parametrize(
+    ("row", "fragment"),
+    [
+        (("AAPL", "abc", "100"), "количество: нужно число"),
+        (("AAPL", "1", ""), "стоимость: нужно число"),
+        (("AAPL", "0", "100"), "количество"),
+        (("AAPL", "1", "-5"), "стоимость"),
+        (("A A", "1", "100"), "тикер"),
+        (("", "1", "100"), "тикер"),
+        (("AAPL", "", ""), "нужно число"),
+    ],
+)
+def test_holding_errors_are_shown_in_the_row(row, fragment):
+    config, errors = parse_form(_holdings_values(row), **DIRS)
+    assert config is None
+    assert fragment in errors["holding.0"]
+
+
+def test_duplicate_tickers_are_reported_in_the_second_row():
+    values = _holdings_values(("AAPL", "1", "100"), ("aapl", "2", "200"))
+    _, errors = parse_form(values, **DIRS)
+    assert set(errors) == {"holding.1"} and "дважды" in errors["holding.1"]
+
+
+def test_only_my_portfolio_is_enough_without_strategies():
+    config, errors = parse_form(
+        _holdings_values(("AAPL", "1", "100"), with_strategies=False), **DIRS
+    )
+    assert errors == {} and config.strategies == [] and config.my_portfolio
+
+
+def test_form_values_roundtrip_with_holdings_and_plain_numbers():
+    from sp500_sim.web.forms import HoldingRow
+
+    raw = {
+        "my_portfolio": {
+            "color": "#123456",
+            "positions": [{"ticker": "AAPL", "qty": 10.5, "value": 1234567.0}],
+        },
+        "strategies": [{"name": "s", "type": "buy_and_hold"}],
+    }
+    config = parse_config(raw)
+    values = FormValues.from_config(config)
+    assert values.holdings == [HoldingRow("AAPL", "10.5", "1234567")]  # без «1.23457e+06»
+    assert values.portfolio_color == "#123456"
+    parsed, errors = parse_form(values, **DIRS)
+    assert errors == {} and parsed.my_portfolio == config.my_portfolio
+    assert config_from_stored(config.to_dict()) == config
+
+
+def test_cash_is_shown_without_exponent():
+    config = parse_config(
+        {"run": {"cash": 1_000_000}, "strategies": [{"name": "s", "type": "buy_and_hold"}]}
+    )
+    assert FormValues.from_config(config).cash == "1000000"

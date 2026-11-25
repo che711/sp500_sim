@@ -22,7 +22,9 @@ REBALANCE_MODES = {
     "yearly": "раз в год",
 }
 MAX_PORTFOLIO_ASSETS = 10  # бумаг в одном портфеле
-MAX_TICKERS = 20  # разных бумаг во всём прогоне
+MAX_TICKERS = 40  # разных бумаг во всём прогоне
+MAX_HOLDINGS = 30  # позиций в «Моём портфеле»
+DEFAULT_PORTFOLIO_NAME = "Мой портфель"
 WEIGHT_TOLERANCE = 0.05  # на сколько процентов сумма весов может отличаться от 100
 
 
@@ -140,12 +142,29 @@ class StrategyConfig:
 
 
 @dataclass(frozen=True)
+class Position:
+    """Позиция из вашего приложения: сколько акций и сколько стоит вся позиция сейчас."""
+
+    ticker: str
+    qty: float
+    value: float
+
+
+@dataclass(frozen=True)
+class MyPortfolioConfig:
+    positions: list[Position]
+    name: str = DEFAULT_PORTFOLIO_NAME
+    color: str | None = None
+
+
+@dataclass(frozen=True)
 class Config:
     data: DataConfig
     broker: BrokerConfig
     run: RunConfig
     output: OutputConfig
     strategies: list[StrategyConfig]
+    my_portfolio: MyPortfolioConfig | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -196,11 +215,19 @@ def _check_portfolio(value: Any) -> tuple[dict[str, float] | None, str | None]:
     return weights, None
 
 
-def _strategies(raw: dict[str, Any], errors: list[ConfigError]) -> list[StrategyConfig]:
+def _strategies(
+    raw: dict[str, Any], errors: list[ConfigError], allow_empty: bool = False
+) -> list[StrategyConfig]:
     items = raw.get("strategies")
+    if allow_empty and items in (None, []):
+        return []
     if not isinstance(items, list) or not items:
         errors.append(
-            ConfigError("Нужна хотя бы одна стратегия: добавьте блок [[strategies]]", "strategies")
+            ConfigError(
+                "Нужна хотя бы одна стратегия (блок [[strategies]]) "
+                "или свои позиции (раздел [my_portfolio])",
+                "strategies",
+            )
         )
         return []
 
@@ -260,10 +287,86 @@ def _strategies(raw: dict[str, Any], errors: list[ConfigError]) -> list[Strategy
     return result
 
 
-def needed_tickers(data: DataConfig, strategies: list[StrategyConfig]) -> list[str]:
-    """Все бумаги прогона без повторов, в порядке появления. Бумага из [data] нужна только
-    тем стратегиям, у которых нет своего портфеля."""
-    tickers: list[str] = []
+def _my_portfolio(raw: dict[str, Any], errors: list[ConfigError]) -> MyPortfolioConfig | None:
+    section = raw.get("my_portfolio")
+    if section is None:
+        return None
+
+    def fail(detail: str, where: str = "my_portfolio") -> None:
+        errors.append(ConfigError(f"[my_portfolio] {detail}", where, detail))
+
+    if not isinstance(section, dict):
+        fail("должна быть таблицей")
+        return None
+    unknown = sorted(set(section) - {"name", "color", "positions"})
+    if unknown:
+        fail(f"неизвестные параметры {unknown}. Допустимые: ['color', 'name', 'positions']")
+        return None
+
+    name = section.get("name", DEFAULT_PORTFOLIO_NAME)
+    color = section.get("color")
+    problems = len(errors)
+    if not isinstance(name, str) or not name.strip():
+        fail("name должно быть непустой строкой")
+    if color is not None and not is_hex(color):
+        fail(
+            f"цвет должен быть в формате #rrggbb, например #7d6fe0, получено {color!r}",
+            "my_portfolio.color",
+        )
+
+    items = section.get("positions")
+    if not isinstance(items, list) or not items:
+        fail('добавьте хотя бы одну позицию: { ticker = "AAPL", qty = 10, value = 1900 }')
+        return None
+    if len(items) > MAX_HOLDINGS:
+        fail(f"позиций не больше {MAX_HOLDINGS}")
+        return None
+
+    positions: list[Position] = []
+    seen: set[str] = set()
+    for i, item in enumerate(items):
+        where = f"my_portfolio.{i}"
+        if not isinstance(item, dict) or set(item) - {"ticker", "qty", "value"}:
+            fail("позиция: нужны только поля ticker, qty, value", where)
+            continue
+        ticker = str(item.get("ticker", "")).strip().upper()
+        qty, value = item.get("qty"), item.get("value")
+        if not TICKER_RE.fullmatch(ticker):
+            fail("тикер: допустимы латинские буквы, цифры и знаки . ^ = _ -", where)
+        elif ticker in seen:
+            fail(f"тикер {ticker} указан дважды", where)
+        elif not _is_number(qty) or qty <= 0:
+            fail(f"{ticker}: количество должно быть положительным числом", where)
+        elif not _is_number(value) or value <= 0:
+            fail(f"{ticker}: стоимость должна быть положительным числом", where)
+        else:
+            seen.add(ticker)
+            positions.append(Position(ticker=ticker, qty=float(qty), value=float(value)))
+    if len(errors) > problems:
+        return None
+    return MyPortfolioConfig(
+        positions=positions, name=name.strip(), color=color.lower() if color else None
+    )
+
+
+def series_names(config: dict[str, Any]) -> list[str]:
+    """Названия линий результата в их порядке: сначала «Мой портфель», потом стратегии.
+    config - сохранённые настройки прогона (словарь)."""
+    names = []
+    portfolio = config.get("my_portfolio")
+    if portfolio:
+        names.append(portfolio.get("name") or DEFAULT_PORTFOLIO_NAME)
+    return names + [s["name"] for s in config.get("strategies", [])]
+
+
+def needed_tickers(
+    data: DataConfig,
+    strategies: list[StrategyConfig],
+    positions: list[Position] | tuple[()] = (),
+) -> list[str]:
+    """Все бумаги прогона без повторов: сначала ваши позиции, потом бумаги стратегий.
+    Бумага из [data] нужна только тем стратегиям, у которых нет своего портфеля."""
+    tickers: list[str] = [p.ticker for p in positions]
     for strategy in strategies:
         for ticker in strategy.portfolio or {data.ticker: 100.0}:
             if ticker not in tickers:
@@ -274,22 +377,29 @@ def needed_tickers(data: DataConfig, strategies: list[StrategyConfig]) -> list[s
 def collect_config(raw: dict[str, Any]) -> tuple[Config | None, list[ConfigError]]:
     """Проверяет настройки целиком и возвращает все найденные ошибки, а не первую."""
     errors: list[ConfigError] = []
-    unknown = sorted(set(raw) - {*SECTIONS, "strategies"})
+    known = sorted([*SECTIONS, "strategies", "my_portfolio"])
+    unknown = sorted(set(raw) - set(known))
     if unknown:
-        errors.append(
-            ConfigError(
-                f"Неизвестные разделы {unknown}. Допустимые: {sorted([*SECTIONS, 'strategies'])}"
-            )
-        )
+        errors.append(ConfigError(f"Неизвестные разделы {unknown}. Допустимые: {known}"))
     parts: dict[str, Any] = {}
     for name, cls in SECTIONS.items():
         try:
             parts[name] = _section(raw, name, cls)
         except ConfigError as exc:
             errors.extend(exc.errors)
-    strategies = _strategies(raw, errors)
+    my_portfolio = _my_portfolio(raw, errors)
+    strategies = _strategies(raw, errors, allow_empty=my_portfolio is not None)
+    if my_portfolio and my_portfolio.name in {s.name for s in strategies}:
+        errors.append(
+            ConfigError(
+                f"Название «{my_portfolio.name}» есть и у портфеля, и у стратегии: задайте разные",
+                "my_portfolio",
+            )
+        )
     if not errors:
-        used = needed_tickers(parts["data"], strategies)
+        used = needed_tickers(
+            parts["data"], strategies, my_portfolio.positions if my_portfolio else ()
+        )
         if len(used) > MAX_TICKERS:
             errors.append(
                 ConfigError(
@@ -299,7 +409,7 @@ def collect_config(raw: dict[str, Any]) -> tuple[Config | None, list[ConfigError
             )
     if errors:
         return None, errors
-    return Config(strategies=strategies, **parts), []
+    return Config(strategies=strategies, my_portfolio=my_portfolio, **parts), []
 
 
 def parse_config(raw: dict[str, Any]) -> Config:

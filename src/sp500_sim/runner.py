@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from .broker import Broker
 from .config import Config, StrategyConfig, needed_tickers
 from .data import align, fingerprint_many, load_many
-from .engine import RunResult, run_portfolio
+from .engine import RunResult, run_holdings, run_portfolio
 from .storage import RunMeta
 from .strategies import REGISTRY
 
@@ -47,7 +47,9 @@ def strategy_weights(sc: StrategyConfig, config: Config) -> dict[str, float]:
 
 
 def execute(config: Config, refresh: bool = False) -> tuple[RunMeta, list[RunResult]]:
-    tickers = needed_tickers(config.data, config.strategies)
+    mine = config.my_portfolio
+    positions = mine.positions if mine else []
+    tickers = needed_tickers(config.data, config.strategies, positions)
     loaded = load_many(config.data, tickers, refresh=refresh)
     # Все стратегии считаются на одном и том же периоде, иначе их нельзя сравнивать
     frames = align({t: p.df for t, p in loaded.items()})
@@ -59,6 +61,8 @@ def execute(config: Config, refresh: bool = False) -> tuple[RunMeta, list[RunRes
     )
 
     results = []
+    if mine:
+        results.append(run_holdings(frames, mine.positions, mine.name))
     for sc in config.strategies:
         weights = strategy_weights(sc, config)
         strategy = REGISTRY[sc.type](**sc.params)
@@ -83,5 +87,6 @@ def execute(config: Config, refresh: bool = False) -> tuple[RunMeta, list[RunRes
         data_rows=int(fp["rows"]),
         data_hash=str(fp["hash"]),
         data_fetched_at=min(p.fetched_at for p in loaded.values()),
+        last_prices={t: float(frames[t]["Close"].iloc[-1]) for t in tickers},
     )
     return meta, results

@@ -188,3 +188,35 @@ def web_portfolio(portfolio_project):
     """Сайт с готовым кэшем цен для портфеля из нескольких бумаг."""
     with _make_client(InlineExecutor()) as client:
         yield client
+
+
+HOLDINGS_CONFIG = """
+[data]
+ticker = "TEST"
+start = "2020-01-01"
+end = "2022-01-01"
+cache_dir = "data"
+
+[my_portfolio]
+positions = [
+  {{ ticker = "AAA", qty = 10, value = 6000 }},
+  {{ ticker = "BBB", qty = 20, value = 4000 }},
+]
+
+[[strategies]]
+name = "Просто TEST"
+type = "buy_and_hold"
+"""
+
+
+@pytest.fixture
+def holdings_project(portfolio_project):
+    """То же, но в config.toml свои позиции: AAA на 6000 и BBB на 4000."""
+    (portfolio_project / "config.toml").write_text(HOLDINGS_CONFIG.format(), encoding="utf-8")
+    return portfolio_project
+
+
+@pytest.fixture
+def web_holdings(holdings_project):
+    with _make_client(InlineExecutor()) as client:
+        yield client

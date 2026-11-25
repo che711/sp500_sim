@@ -11,10 +11,11 @@ from typing import Any
 
 import pandas as pd
 
+from .config import series_names
 from .engine import TRADE_COLUMNS, RunResult
 from .errors import SimError
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 STATUS_RUNNING = "running"
 STATUS_DONE = "done"
@@ -44,7 +45,8 @@ CREATE TABLE IF NOT EXISTS runs (
     data_fetched_at  TEXT,
     config_json      TEXT NOT NULL,
     status           TEXT NOT NULL DEFAULT 'done',
-    error            TEXT
+    error            TEXT,
+    last_prices      TEXT
 );
 CREATE TABLE IF NOT EXISTS results (
     run_id        INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
@@ -112,6 +114,11 @@ UPDATE trades SET ticker = COALESCE(
 """
 
 
+# Версия 3 -> 4: у прогона сохраняются последние цены бумаг из данных (JSON), по ним
+# отчёт сверяет введённые вами стоимости позиций.
+MIGRATION_3_TO_4 = "ALTER TABLE runs ADD COLUMN last_prices TEXT;"
+
+
 @dataclass(frozen=True)
 class RunMeta:
     """Что нужно знать, чтобы воспроизвести прогон: когда, на каком коде и на каких данных."""
@@ -124,6 +131,7 @@ class RunMeta:
     data_rows: int
     data_hash: str
     data_fetched_at: str
+    last_prices: dict[str, float] | None = None  # тикер -> последняя цена в данных
 
 
 @dataclass(frozen=True)
@@ -132,6 +140,10 @@ class StoredRun:
     meta: dict[str, Any]
     config: dict[str, Any]
     results: list[RunResult]
+
+
+def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    return any(row[1] == column for row in conn.execute(f"PRAGMA table_info({table})"))
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
@@ -149,8 +161,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
                 conn.executescript("BEGIN;" + MIGRATION_1_TO_2 + "COMMIT;")
             finally:
                 conn.execute("PRAGMA foreign_keys = ON")
-        if version < 3:
+        # Колонка может уже быть, если прошлое обновление прервалось: тогда шаг пропускаем
+        if version < 3 and not _has_column(conn, "trades", "ticker"):
             conn.executescript("BEGIN;" + MIGRATION_2_TO_3 + "COMMIT;")
+        if version < 4 and not _has_column(conn, "runs", "last_prices"):
+            conn.executescript("BEGIN;" + MIGRATION_3_TO_4 + "COMMIT;")
     conn.executescript(SCHEMA)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
@@ -212,6 +227,10 @@ def _write_results(conn: sqlite3.Connection, run_id: int, results: list[RunResul
         )
 
 
+def _prices_json(prices: dict[str, float] | None) -> str | None:
+    return json.dumps(prices, sort_keys=True) if prices else None
+
+
 def _dumps(config: dict[str, Any]) -> str:
     return json.dumps(config, ensure_ascii=False, sort_keys=True)
 
@@ -223,8 +242,8 @@ def save_run(
     with conn:
         cur = conn.execute(
             "INSERT INTO runs (created_at, git_commit, ticker, data_start, data_end, data_rows,"
-            " data_hash, data_fetched_at, config_json, status)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " data_hash, data_fetched_at, config_json, status, last_prices)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 meta.created_at,
                 meta.git_commit,
@@ -236,6 +255,7 @@ def save_run(
                 meta.data_fetched_at,
                 _dumps(config),
                 STATUS_DONE,
+                _prices_json(meta.last_prices),
             ),
         )
         run_id = int(cur.lastrowid or 0)
@@ -259,8 +279,8 @@ def finish_run(
     with conn:
         cur = conn.execute(
             "UPDATE runs SET git_commit = ?, ticker = ?, data_start = ?, data_end = ?,"
-            " data_rows = ?, data_hash = ?, data_fetched_at = ?, status = ?, error = NULL"
-            " WHERE id = ? AND status = ?",
+            " data_rows = ?, data_hash = ?, data_fetched_at = ?, last_prices = ?, status = ?,"
+            " error = NULL WHERE id = ? AND status = ?",
             (
                 meta.git_commit,
                 meta.ticker,
@@ -269,6 +289,7 @@ def finish_run(
                 meta.data_rows,
                 meta.data_hash,
                 meta.data_fetched_at,
+                _prices_json(meta.last_prices),
                 STATUS_DONE,
                 run_id,
                 STATUS_RUNNING,
@@ -312,13 +333,16 @@ def load_meta(conn: sqlite3.Connection, run_id: int) -> tuple[dict[str, Any], di
     В описании есть status и error; у идущего прогона данные о ценах пока пусты."""
     row = conn.execute(
         "SELECT created_at, git_commit, ticker, data_start, data_end, data_rows,"
-        " data_hash, data_fetched_at, status, error, config_json FROM runs WHERE id = ?",
+        " data_hash, data_fetched_at, last_prices, status, error, config_json"
+        " FROM runs WHERE id = ?",
         (run_id,),
     ).fetchone()
     if row is None:
         raise StorageError(f"Прогон №{run_id} не найден")
     keys = [f.name for f in fields(RunMeta)] + ["status", "error"]
-    return dict(zip(keys, row[:-1], strict=True)), json.loads(row[-1])
+    meta = dict(zip(keys, row[:-1], strict=True))
+    meta["last_prices"] = json.loads(meta["last_prices"]) if meta["last_prices"] else None
+    return meta, json.loads(row[-1])
 
 
 def _require_done(run_id: int, meta: dict[str, Any]) -> None:
@@ -346,8 +370,7 @@ def load_run(conn: sqlite3.Connection, run_id: int) -> StoredRun:
     _require_done(run_id, meta)
     start_cash = float(config["run"]["cash"])
     results = []
-    for strat in config["strategies"]:
-        name = strat["name"]
+    for name in series_names(config):
         eq = pd.read_sql_query(
             "SELECT date, value FROM equity WHERE run_id = ? AND strategy = ? ORDER BY date",
             conn,

@@ -211,11 +211,11 @@ def test_weights_may_be_a_little_off_because_of_rounding():
 
 def test_total_ticker_limit():
     strategies = [
-        {"name": f"s{i}", "type": "buy_and_hold", "portfolio": {f"T{i}{j}": 25 for j in range(4)}}
+        {"name": f"s{i}", "type": "buy_and_hold", "portfolio": {f"T{i}{j}": 12.5 for j in range(8)}}
         for i in range(6)
     ]
     config, errors = collect_config({"strategies": strategies})
-    assert config is None and "не больше 20" in str(errors[0])
+    assert config is None and "не больше 40" in str(errors[0])
 
 
 def test_needed_tickers_uses_data_ticker_only_for_strategies_without_portfolio():

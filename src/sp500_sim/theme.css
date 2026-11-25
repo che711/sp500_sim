@@ -318,3 +318,11 @@ details > .scroll { margin-bottom: .9rem; }
   border: 1px solid var(--line); border-radius: 12px;
 }
 .kpi-sub { font-size: .8rem; opacity: .88; margin-top: .15rem; }
+.hrow { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, .8fr) minmax(0, 1.2fr) auto;
+        gap: .5rem; margin-bottom: .5rem; }
+.hrow .error { grid-column: 1 / -1; margin-top: -.2rem; }
+@media (max-width: 640px) { .hrow { grid-template-columns: 1fr 1fr auto; } }
+.holding-tools { display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+                 flex-wrap: wrap; margin-top: .3rem; }
+.holding-tools .check { gap: .6rem; }
+.note-bg { color: var(--on-bg-muted); font-size: .88rem; margin: .6rem .4rem 1rem; }

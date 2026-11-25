@@ -29,6 +29,7 @@ AXIS = {
     "dark": {"text": "#b3afdc", "grid": "#3a3566"},
 }
 MAX_TRADE_ROWS = 1000
+PRICE_MISMATCH = 0.25  # на сколько цена из ваших данных может отличаться от цены в данных
 HIGHER_IS_BETTER = ("final_value", "total_return", "cagr", "max_drawdown", "sharpe")
 
 Cell = str | tuple[str, str]  # текст или (текст, css-класс)
@@ -147,12 +148,6 @@ def _table(
     )
 
 
-def _strategy_colors(config: dict[str, Any], count: int) -> list[str | None]:
-    """Свои цвета стратегий из настроек; у кого цвета нет, там None (берётся палитра)."""
-    colors = [s.get("color") for s in config.get("strategies", [])]
-    return (colors + [None] * count)[:count]
-
-
 def _portfolio_text(strategy: dict[str, Any]) -> str:
     """«AAPL 40% · MSFT 60%» для стратегии с портфелем, иначе пустая строка."""
     portfolio = strategy.get("portfolio")
@@ -162,8 +157,32 @@ def _portfolio_text(strategy: dict[str, Any]) -> str:
     return " · ".join(f"{t} {w:g}%" for t, w in ordered)
 
 
+def _positions_text(positions: list[dict[str, Any]]) -> str:
+    """«AAPL 38% · MSFT 30%»: доли позиций по стоимости, крупные первыми."""
+    total = sum(p["value"] for p in positions)
+    ordered = sorted(positions, key=lambda p: (-p["value"], p["ticker"]))
+    return " · ".join(f"{p['ticker']} {p['value'] / total * 100:.0f}%" for p in ordered)
+
+
+def _series_specs(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """Цвет и подпись каждой линии результата в том же порядке, что и сами результаты:
+    сначала «Мой портфель» (если он есть), потом стратегии."""
+    specs = []
+    mine = config.get("my_portfolio")
+    if mine:
+        specs.append({"color": mine.get("color"), "note": _positions_text(mine["positions"])})
+    for strategy in config.get("strategies", []):
+        specs.append({"color": strategy.get("color"), "note": _portfolio_text(strategy)})
+    return specs
+
+
+def _strategy_colors(config: dict[str, Any], count: int) -> list[str | None]:
+    colors = [spec["color"] for spec in _series_specs(config)]
+    return (colors + [None] * count)[:count]
+
+
 def _strategy_notes(config: dict[str, Any], count: int) -> list[str]:
-    notes = [_portfolio_text(s) for s in config.get("strategies", [])]
+    notes = [spec["note"] for spec in _series_specs(config)]
     return (notes + [""] * count)[:count]
 
 
@@ -252,6 +271,61 @@ def _trades_table(r: RunResult) -> str:
     return table + note
 
 
+def _positions_table(config: dict[str, Any], meta: dict[str, Any]) -> str:
+    """«Мои позиции»: что вы ввели и что из этого следует (цена акции, доля)."""
+    mine = config.get("my_portfolio")
+    if not mine:
+        return ""
+    positions = sorted(mine["positions"], key=lambda p: -p["value"])
+    total = sum(p["value"] for p in positions)
+    last = meta.get("last_prices") or {}
+    rows: list[list[Cell]] = []
+    doubtful = []
+    for p in positions:
+        implied = p["value"] / p["qty"]
+        price = last.get(p["ticker"])
+        off = price is not None and abs(implied / price - 1) > PRICE_MISMATCH
+        if off:
+            doubtful.append(p["ticker"])
+        rows.append(
+            [
+                f"<strong>{_esc(p['ticker'])}</strong>",
+                f"{p['qty']:g}",
+                fmt_money(implied),
+                fmt_money(p["value"]),
+                f"{p['value'] / total * 100:.1f}%",
+                (fmt_money(price) if price is not None else "—", "neg" if off else ""),
+            ]
+        )
+    rows.append(["Итого", "", "", f"<strong>{fmt_money(total)}</strong>", "100%", ""])
+    header = [
+        "Тикер",
+        "Штук",
+        "Цена за акцию (из ваших данных)",
+        "Стоимость",
+        "Доля",
+        f"Последняя цена в данных ({meta['data_end']})",
+    ]
+    intro = (
+        "График показывает, как менялась бы стоимость ваших нынешних позиций, если бы они были "
+        "у вас раньше. Это не ваша фактическая доходность: покупать вы могли позже."
+    )
+    warning = ""
+    if doubtful:
+        warning = (
+            '<div class="alert alert-error">Цена за акцию из ваших данных заметно отличается от '
+            f"цены в данных ({_esc(', '.join(doubtful))}). Проверьте, что в поле «стоимость» стоит "
+            "стоимость всей позиции, а не цена одной акции. Если бумага в другой валюте, "
+            "расхождение нормально.</div>"
+        )
+    return (
+        "<h2>Мои позиции</h2>"
+        + _table(header, rows)
+        + f'<p class="note-bg">{_esc(intro)}</p>'
+        + warning
+    )
+
+
 def _params_table(meta: dict[str, Any], config: dict[str, Any]) -> str:
     broker = config["broker"]
     period = f"{meta['data_start']} — {meta['data_end']}, {meta['data_rows']} дней"
@@ -296,6 +370,8 @@ def build_body(results: list[RunResult], meta: dict[str, Any], config: dict[str,
 
 <h2>Итоги</h2>
 {_metrics_table(results)}
+
+{_positions_table(config, meta)}
 
 <h2>Капитал</h2>
 {_chart_html(results, "equity", colors)}
