@@ -11,6 +11,12 @@ def _flatten(meta: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
         for key, value in config[section].items():
             if key != "cache_dir":
                 flat[f"{section}.{key}"] = value
+    mine = config.get("my_portfolio")
+    if mine:
+        positions = ", ".join(
+            f"{p['ticker']} {p['qty']:g}×{p['value']:g}" for p in mine["positions"]
+        )
+        flat["my_portfolio"] = positions
     for s in config["strategies"]:
         params = ", ".join(f"{k}={v}" for k, v in s["params"].items())
         text = f"{s['type']}({params})"

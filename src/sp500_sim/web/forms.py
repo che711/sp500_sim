@@ -43,6 +43,20 @@ class StrategyRow:
 
 
 @dataclass
+class HoldingRow:
+    """Строка «Моего портфеля»: тикер, сколько акций, сколько стоит вся позиция сейчас."""
+
+    ticker: str = ""
+    qty: str = ""
+    value: str = ""
+
+
+def _plain(number: float) -> str:
+    """Число без экспоненты и лишних нулей: 1900.0 -> '1900', 0.5 -> '0.5'."""
+    return f"{number:.6f}".rstrip("0").rstrip(".")
+
+
+@dataclass
 class FormValues:
     ticker: str = ""
     start: str = ""
@@ -53,6 +67,8 @@ class FormValues:
     min_change: str = ""
     refresh: bool = False
     strategies: list[StrategyRow] = field(default_factory=list)
+    holdings: list[HoldingRow] = field(default_factory=list)
+    portfolio_color: str = ""
 
     @classmethod
     def from_config(cls, config: Config) -> FormValues:
@@ -60,7 +76,7 @@ class FormValues:
             ticker=config.data.ticker,
             start=config.data.start,
             end=config.data.end or "",
-            cash=f"{config.run.cash:g}",
+            cash=_plain(config.run.cash),
             commission=_percent(config.broker.commission),
             slippage=_percent(config.broker.slippage),
             min_change=_percent(config.broker.min_change),
@@ -75,6 +91,11 @@ class FormValues:
                 )
                 for i, s in enumerate(config.strategies)
             ],
+            holdings=[
+                HoldingRow(p.ticker, _plain(p.qty), _plain(p.value))
+                for p in (config.my_portfolio.positions if config.my_portfolio else [])
+            ],
+            portfolio_color=(config.my_portfolio.color if config.my_portfolio else None) or "",
         )
 
     @classmethod
@@ -91,6 +112,12 @@ class FormValues:
             form.getlist("strategy_rebalance"),
             fillvalue="",
         )
+        holdings = zip_longest(
+            form.getlist("holding_ticker"),
+            form.getlist("holding_qty"),
+            form.getlist("holding_value"),
+            fillvalue="",
+        )
         return cls(
             ticker=text("ticker"),
             start=text("start"),
@@ -101,6 +128,8 @@ class FormValues:
             min_change=text("min_change"),
             refresh=form.get("refresh") is not None,
             strategies=[StrategyRow(*(str(x).strip() for x in row)) for row in rows],
+            holdings=[HoldingRow(*(str(x).strip() for x in row)) for row in holdings],
+            portfolio_color=text("portfolio_color"),
         )
 
 
@@ -206,8 +235,26 @@ def parse_form(
         if percent is not None:
             raw["broker"][name] = percent / 100
 
-    if not values.strategies:
-        errors["form"] = "Добавьте хотя бы одну стратегию"
+    filled = [
+        h for h in values.holdings if h.ticker or h.qty or h.value
+    ]  # пустые строки пропускаем
+    positions: list[dict[str, Any]] = []
+    for i, row in enumerate(filled):
+        item: dict[str, Any] = {"ticker": row.ticker}
+        for key, label in (("qty", "количество"), ("value", "стоимость")):
+            number = _number(getattr(row, key), "_tmp", {})
+            if number is None:
+                errors.setdefault(f"holding.{i}", f"{label}: нужно число")
+            else:
+                item[key] = number
+        positions.append(item)
+    if positions:
+        raw["my_portfolio"] = {"positions": positions}
+        if values.portfolio_color:
+            raw["my_portfolio"]["color"] = values.portfolio_color
+
+    if not values.strategies and not positions:
+        errors["form"] = "Добавьте хотя бы одну стратегию или позицию портфеля"
     elif len(values.strategies) > MAX_STRATEGIES:
         errors["form"] = f"Стратегий не больше {MAX_STRATEGIES}"
     for i, row in enumerate(values.strategies[:MAX_STRATEGIES]):
@@ -234,7 +281,11 @@ def parse_form(
     config, config_errors = collect_config(raw)
     for exc in config_errors:
         where = exc.field or ""
-        if where.startswith("strategies."):
+        if where == "my_portfolio.color":
+            key = "portfolio_color"
+        elif where.startswith("my_portfolio."):
+            key = "holding." + where.split(".")[1]
+        elif where.startswith("strategies."):
             key = "strategy." + where.split(".")[1]
         elif where.startswith(("data.", "broker.", "run.")):
             key = where.split(".", 1)[1]
@@ -288,7 +339,10 @@ def config_from_stored(stored: dict[str, Any]) -> Config:
             item["portfolio"] = s["portfolio"]
             item["rebalance"] = s.get("rebalance", "never")
         strategies.append(item)
-    return parse_config({**stored, "strategies": strategies})
+    raw = {**stored, "strategies": strategies}
+    if not raw.get("my_portfolio"):
+        raw.pop("my_portfolio", None)
+    return parse_config(raw)
 
 
 def strategy_catalog() -> list[dict[str, str]]:

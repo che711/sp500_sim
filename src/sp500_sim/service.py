@@ -51,7 +51,8 @@ def run_and_save(
 def start_run(config: Config, db_path: str | Path) -> int:
     """Заводит прогон в статусе «идёт» и возвращает его номер."""
     with closing(storage.connect(db_path)) as conn:
-        tickers = needed_tickers(config.data, config.strategies)
+        mine = config.my_portfolio
+        tickers = needed_tickers(config.data, config.strategies, mine.positions if mine else [])
         return storage.create_run(conn, config.to_dict(), ", ".join(tickers))
 
 
