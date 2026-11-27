@@ -150,16 +150,15 @@ def run_strategy(
 def run_holdings(
     frames: Mapping[str, pd.DataFrame], positions: list[Position], name: str
 ) -> RunResult:
-    """Как менялась бы стоимость ваших нынешних позиций в прошлом.
+    """Как менялась бы стоимость ваших нынешних акций в прошлом: количество на цену.
 
-    Сделок нет: количество акций считается неизменным. Каждая позиция привязана к цене,
-    которую вы ввели (стоимость сегодня), и двигается так же, как цена бумаги. Курсы валют не
-    учитываются. Результат не ваша фактическая доходность: раньше эти акции могли быть не у вас."""
+    Сделок нет: количество акций считается неизменным. Цены берутся из данных, курсы валют не
+    учитываются. Результат не ваша фактическая доходность: раньше эти акции могли быть не у вас.
+    Средняя цена покупки на кривую не влияет, она нужна для вложенной суммы и прибыли."""
     index = next(iter(frames.values())).index
     total = pd.Series(0.0, index=index)
     for position in positions:
-        close = frames[position.ticker]["Close"]
-        total = total + position.value * close / close.iloc[-1]
+        total = total + position.qty * frames[position.ticker]["Close"]
     log.info("%s: стоимость сейчас %.2f", name, total.iloc[-1])
     return RunResult(
         name=name,

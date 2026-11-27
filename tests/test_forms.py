@@ -306,13 +306,13 @@ def _holdings_values(*rows, color="", with_strategies=True):
 
 
 def test_holdings_from_form_reach_config():
-    values = _holdings_values(("aapl", "10", "1900"), ("MSFT", "5,5", "2100,50"))
+    values = _holdings_values(("aapl", "10", "1900"), ("MSFT", "5,5", "210,50"))
     config, errors = parse_form(values, **DIRS)
     assert errors == {}
     positions = config.my_portfolio.positions
-    assert [(p.ticker, p.qty, p.value) for p in positions] == [
+    assert [(p.ticker, p.qty, p.avg_price) for p in positions] == [
         ("AAPL", 10.0, 1900.0),
-        ("MSFT", 5.5, 2100.5),  # запятая как десятичный знак принимается
+        ("MSFT", 5.5, 210.5),  # запятая как десятичный знак принимается
     ]
 
 
@@ -334,9 +334,9 @@ def test_portfolio_color_from_form():
     ("row", "fragment"),
     [
         (("AAPL", "abc", "100"), "количество: нужно число"),
-        (("AAPL", "1", ""), "стоимость: нужно число"),
+        (("AAPL", "1", ""), "стоимость позиции: нужно число"),
         (("AAPL", "0", "100"), "количество"),
-        (("AAPL", "1", "-5"), "стоимость"),
+        (("AAPL", "1", "-5"), "средняя цена"),
         (("A A", "1", "100"), "тикер"),
         (("", "1", "100"), "тикер"),
         (("AAPL", "", ""), "нужно число"),
@@ -367,7 +367,7 @@ def test_form_values_roundtrip_with_holdings_and_plain_numbers():
     raw = {
         "my_portfolio": {
             "color": "#123456",
-            "positions": [{"ticker": "AAPL", "qty": 10.5, "value": 1234567.0}],
+            "positions": [{"ticker": "AAPL", "qty": 10.5, "avg_price": 1234567.0}],
         },
         "strategies": [{"name": "s", "type": "buy_and_hold"}],
     }

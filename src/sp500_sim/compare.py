@@ -14,7 +14,7 @@ def _flatten(meta: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     mine = config.get("my_portfolio")
     if mine:
         positions = ", ".join(
-            f"{p['ticker']} {p['qty']:g}×{p['value']:g}" for p in mine["positions"]
+            f"{p['ticker']} {p['qty']:g}×{p['avg_price']:g}" for p in mine["positions"]
         )
         flat["my_portfolio"] = positions
     for s in config["strategies"]:
