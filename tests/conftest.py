@@ -199,8 +199,8 @@ cache_dir = "data"
 
 [my_portfolio]
 positions = [
-  {{ ticker = "AAA", qty = 10, value = 6000 }},
-  {{ ticker = "BBB", qty = 20, value = 4000 }},
+  {{ ticker = "AAA", qty = 10, avg_price = 100 }},
+  {{ ticker = "BBB", qty = 20, avg_price = 50 }},
 ]
 
 [[strategies]]
@@ -211,7 +211,7 @@ type = "buy_and_hold"
 
 @pytest.fixture
 def holdings_project(portfolio_project):
-    """То же, но в config.toml свои позиции: AAA на 6000 и BBB на 4000."""
+    """То же, но в config.toml свои позиции: 10 акций AAA по 100 и 20 акций BBB по 50."""
     (portfolio_project / "config.toml").write_text(HOLDINGS_CONFIG.format(), encoding="utf-8")
     return portfolio_project
 

@@ -20,8 +20,8 @@ from sp500_sim.report import build_body
 
 DB = "results/results.db"
 POSITIONS = [
-    {"ticker": "AAA", "qty": 10, "value": 6000},
-    {"ticker": "BBB", "qty": 20, "value": 4000},
+    {"ticker": "AAA", "qty": 10, "avg_price": 100},
+    {"ticker": "BBB", "qty": 20, "avg_price": 50},
 ]
 
 
@@ -41,8 +41,8 @@ def test_positions_are_read_and_normalized():
     config = parse_config(mine())
     portfolio = config.my_portfolio
     assert portfolio.name == "Мой портфель" and portfolio.color is None
-    assert portfolio.positions == [Position("AAA", 10.0, 6000.0), Position("BBB", 20.0, 4000.0)]
-    lower = parse_config(mine(positions=[{"ticker": "aapl", "qty": 1, "value": 100}]))
+    assert portfolio.positions == [Position("AAA", 10.0, 100.0), Position("BBB", 20.0, 50.0)]
+    lower = parse_config(mine(positions=[{"ticker": "aapl", "qty": 1, "avg_price": 190}]))
     assert lower.my_portfolio.positions[0].ticker == "AAPL"
 
 
@@ -63,21 +63,25 @@ def test_neither_strategies_nor_positions_is_an_error():
 @pytest.mark.parametrize(
     ("positions", "fragment"),
     [
-        ([{"ticker": "AAA", "qty": 0, "value": 100}], "количество"),
-        ([{"ticker": "AAA", "qty": -1, "value": 100}], "количество"),
-        ([{"ticker": "AAA", "qty": "много", "value": 100}], "количество"),
-        ([{"ticker": "AAA", "qty": 1, "value": 0}], "стоимость"),
-        ([{"ticker": "AAA", "qty": 1}], "стоимость"),
-        ([{"ticker": "A A", "qty": 1, "value": 1}], "тикер"),
-        ([{"qty": 1, "value": 1}], "тикер"),
-        ([{"ticker": "AAA", "qty": 1, "value": 1, "price": 5}], "ticker, qty, value"),
+        ([{"ticker": "AAA", "qty": 0, "avg_price": 100}], "количество"),
+        ([{"ticker": "AAA", "qty": -1, "avg_price": 100}], "количество"),
+        ([{"ticker": "AAA", "qty": "много", "avg_price": 100}], "количество"),
+        ([{"ticker": "AAA", "qty": 1, "avg_price": 0}], "средняя цена"),
+        ([{"ticker": "AAA", "qty": 1, "avg_price": -3}], "средняя цена"),
+        ([{"ticker": "AAA", "qty": 1}], "средняя цена"),
+        ([{"ticker": "A A", "qty": 1, "avg_price": 1}], "тикер"),
+        ([{"qty": 1, "avg_price": 1}], "тикер"),
+        ([{"ticker": "AAA", "qty": 1, "avg_price": 1, "value": 5}], "ticker, qty, avg_price"),
         (
-            [{"ticker": "AAA", "qty": 1, "value": 1}, {"ticker": "aaa", "qty": 2, "value": 2}],
+            [
+                {"ticker": "AAA", "qty": 1, "avg_price": 1},
+                {"ticker": "aaa", "qty": 2, "avg_price": 2},
+            ],
             "дважды",
         ),
         ([], "хотя бы одну позицию"),
         ("AAA", "хотя бы одну позицию"),
-        ([{"ticker": f"T{i}", "qty": 1, "value": 1} for i in range(31)], "не больше 30"),
+        ([{"ticker": f"T{i}", "qty": 1, "avg_price": 1} for i in range(31)], "не больше 30"),
     ],
 )
 def test_bad_positions(positions, fragment):
@@ -104,9 +108,9 @@ def test_portfolio_name_must_differ_from_strategy_names():
 def test_positions_from_toml(tmp_path):
     path = tmp_path / "c.toml"
     path.write_text(
-        '[my_portfolio]\npositions = [\n  { ticker = "AAPL", qty = 10, value = 1900.5 },\n]\n'
+        '[my_portfolio]\npositions = [\n  { ticker = "AAPL", qty = 10, avg_price = 190.5 },\n]\n'
     )
-    assert load_config(path).my_portfolio.positions == [Position("AAPL", 10.0, 1900.5)]
+    assert load_config(path).my_portfolio.positions == [Position("AAPL", 10.0, 190.5)]
 
 
 def test_my_tickers_come_first_and_data_ticker_is_not_needed_without_strategies():
@@ -130,33 +134,30 @@ def test_series_names_put_the_portfolio_first():
 # --------------------------------------------------------------------- расчёт
 
 
-def test_value_curve_ends_at_the_current_value_and_follows_prices(stocks):
-    positions = [Position("AAA", 10, 6000), Position("BBB", 20, 4000)]
-    result = run_holdings({t: stocks[t] for t in ("AAA", "BBB")}, positions, "Мой портфель")
-    assert result.equity.iloc[-1] == pytest.approx(10_000)  # ровно то, что вы ввели
-    first = sum(
-        p.value * stocks[p.ticker]["Close"].iloc[0] / stocks[p.ticker]["Close"].iloc[-1]
-        for p in positions
-    )
-    assert result.equity.iloc[0] == pytest.approx(first)
-    assert result.start_cash == pytest.approx(first)
-    assert result.trades.empty
-    assert result.metrics["n_trades"] == 0
-    assert result.metrics["total_return"] == pytest.approx(10_000 / first - 1)
-
-
-def test_scaling_all_values_scales_the_curve(stocks):
+def test_value_curve_is_quantity_times_price(stocks):
+    positions = [Position("AAA", 10, 100), Position("BBB", 20, 50)]
     frames = {t: stocks[t] for t in ("AAA", "BBB")}
-    one = run_holdings(frames, [Position("AAA", 1, 100), Position("BBB", 1, 50)], "p")
-    two = run_holdings(frames, [Position("AAA", 1, 200), Position("BBB", 1, 100)], "p")
+    result = run_holdings(frames, positions, "Мой портфель")
+    expected = 10 * stocks["AAA"]["Close"] + 20 * stocks["BBB"]["Close"]
+    pd.testing.assert_series_equal(result.equity, expected.rename("equity"))
+    assert result.start_cash == pytest.approx(expected.iloc[0])
+    assert result.trades.empty and result.metrics["n_trades"] == 0
+    assert result.metrics["total_return"] == pytest.approx(expected.iloc[-1] / expected.iloc[0] - 1)
+
+
+def test_average_price_does_not_change_the_curve(stocks):
+    frames = {t: stocks[t] for t in ("AAA", "BBB")}
+    cheap = run_holdings(frames, [Position("AAA", 1, 1), Position("BBB", 1, 1)], "p")
+    dear = run_holdings(frames, [Position("AAA", 1, 900), Position("BBB", 1, 900)], "p")
+    pd.testing.assert_series_equal(cheap.equity, dear.equity)
+
+
+def test_doubling_quantities_doubles_the_curve(stocks):
+    frames = {t: stocks[t] for t in ("AAA", "BBB")}
+    one = run_holdings(frames, [Position("AAA", 1, 5), Position("BBB", 2, 5)], "p")
+    two = run_holdings(frames, [Position("AAA", 2, 5), Position("BBB", 4, 5)], "p")
     pd.testing.assert_series_equal(two.equity, one.equity * 2)
     assert two.metrics["total_return"] == pytest.approx(one.metrics["total_return"])
-
-
-def test_single_position_follows_its_own_price(stocks):
-    result = run_holdings({"AAA": stocks["AAA"]}, [Position("AAA", 3, 900)], "p")
-    expected = 900 * stocks["AAA"]["Close"] / stocks["AAA"]["Close"].iloc[-1]
-    pd.testing.assert_series_equal(result.equity, expected.rename("equity"))
 
 
 # ----------------------------------------------- прогон, хранение и отчёт
@@ -166,12 +167,16 @@ def run():
     return service.run_and_save(load_config("config.toml"), DB)
 
 
+def last_close(stocks, ticker):
+    return float(stocks[ticker]["Close"].iloc[-1])
+
+
 def test_portfolio_comes_first_and_uses_common_period(holdings_project, stocks):
     outcome = run()
-    names = [r.name for r in outcome.results]
-    assert names == ["Мой портфель", "Просто TEST"]
+    assert [r.name for r in outcome.results] == ["Мой портфель", "Просто TEST"]
     assert outcome.meta.ticker == "AAA, BBB, TEST"
-    assert outcome.results[0].equity.iloc[-1] == pytest.approx(10_000)
+    expected = 10 * last_close(stocks, "AAA") + 20 * last_close(stocks, "BBB")
+    assert outcome.results[0].equity.iloc[-1] == pytest.approx(expected)
     assert outcome.results[0].equity.index.equals(outcome.results[1].equity.index)
 
 
@@ -179,7 +184,7 @@ def test_last_prices_are_saved_with_the_run(holdings_project, stocks):
     outcome = run()
     with closing(storage.connect(DB)) as conn:
         meta, _ = storage.load_meta(conn, outcome.run_id)
-    assert meta["last_prices"]["AAA"] == pytest.approx(stocks["AAA"]["Close"].iloc[-1])
+    assert meta["last_prices"]["AAA"] == pytest.approx(last_close(stocks, "AAA"))
     assert set(meta["last_prices"]) == {"AAA", "BBB", "TEST"}
 
 
@@ -194,51 +199,89 @@ def test_stored_run_keeps_the_order_and_curves(holdings_project):
     assert stored.results[0].trades.empty
 
 
-def body_of(outcome_id):
+def body_of(run_id):
     with closing(storage.connect(DB)) as conn:
-        stored = storage.load_run(conn, outcome_id)
+        stored = storage.load_run(conn, run_id)
     return build_body(stored.results, stored.meta, stored.config)
 
 
-def test_report_shows_positions_and_composition(holdings_project):
+def test_tile_shows_profit_against_what_you_paid(holdings_project, stocks):
+    value = 10 * last_close(stocks, "AAA") + 20 * last_close(stocks, "BBB")
+    invested = 10 * 100 + 20 * 50
+    body = body_of(run().run_id)
+    assert f"{(value / invested - 1) * 100:+.1f}" in body  # главная цифра: к вложенному
+    assert "к вложенному" in body
+    assert f"$ {invested:,.2f}".replace(",", " ") in body  # «Вложено»
+
+
+def test_positions_table_shows_cost_price_now_and_profit(holdings_project, stocks):
     body = body_of(run().run_id)
     assert "<h2>Мои позиции</h2>" in body
-    assert "AAA 60% · BBB 40%" in body  # доли считаются по стоимости 6000 и 4000
-    assert "600.00" in body  # цена за акцию из ваших данных: 6000 / 10
-    assert "200.00" in body  # 4000 / 20
+    assert ">Средняя цена</th>" in body
+    assert "100.00" in body and "50.00" in body  # то, что вы ввели
+    assert "1 000.00" in body  # вложено в AAA: 10 × 100
+    assert f"{last_close(stocks, 'AAA'):,.2f}".replace(",", " ") in body  # цена сейчас
     assert "не ваша фактическая доходность" in body
-    assert 'class="kpi tile-0"' in body  # портфель идёт первой плиткой
 
 
-def set_values(stocks, aaa, bbb):
-    """Записывает в config.toml стоимости позиций (AAA: 10 штук, BBB: 20 штук)."""
+def test_composition_is_by_current_value(holdings_project, stocks):
+    now = {t: n * last_close(stocks, t) for t, n in (("AAA", 10), ("BBB", 20))}
+    share = now["AAA"] / sum(now.values()) * 100
+    body = body_of(run().run_id)
+    big, small = ("AAA", "BBB") if now["AAA"] > now["BBB"] else ("BBB", "AAA")
+    big_share = max(share, 100 - share)
+    assert f"{big} {big_share:.0f}% · {small} {100 - big_share:.0f}%" in body
+
+
+def test_chart_has_a_dashed_cost_line_only_with_my_portfolio(holdings_project):
+    assert "stroke-dasharray" in body_of(run().run_id)
+
+
+def test_plain_report_has_no_cost_line(project):
+    outcome = service.run_and_save(load_config("config.toml"), DB)
+    body = body_of(outcome.run_id)
+    assert "stroke-dasharray" not in body and "Мои позиции" not in body
+
+
+def set_prices(aaa, bbb):
     edit_config(
-        '{ ticker = "AAA", qty = 10, value = 6000 }',
-        f'{{ ticker = "AAA", qty = 10, value = {aaa:.2f} }}',
+        '{ ticker = "AAA", qty = 10, avg_price = 100 }',
+        f'{{ ticker = "AAA", qty = 10, avg_price = {aaa:.2f} }}',
     )
     edit_config(
-        '{ ticker = "BBB", qty = 20, value = 4000 }',
-        f'{{ ticker = "BBB", qty = 20, value = {bbb:.2f} }}',
+        '{ ticker = "BBB", qty = 20, avg_price = 50 }',
+        f'{{ ticker = "BBB", qty = 20, avg_price = {bbb:.2f} }}',
     )
 
 
-def test_report_warns_when_value_looks_like_a_price_per_share(holdings_project, stocks):
-    last = {t: stocks[t]["Close"].iloc[-1] for t in ("AAA", "BBB")}
-    # BBB введён верно (20 штук по цене из данных), а у AAA вместо стоимости позиции цена акции
-    set_values(stocks, aaa=last["AAA"], bbb=last["BBB"] * 20)
+def test_report_warns_when_total_was_entered_instead_of_average(holdings_project, stocks):
+    # У AAA вместо средней цены ввели стоимость всех 10 акций: в 10 раз больше цены акции
+    set_prices(aaa=last_close(stocks, "AAA") * 10, bbb=last_close(stocks, "BBB") * 1.1)
     body = body_of(run().run_id)
     assert "заметно отличается" in body and "(AAA)" in body
 
 
 def test_report_does_not_warn_when_numbers_agree(holdings_project, stocks):
-    last = {t: stocks[t]["Close"].iloc[-1] for t in ("AAA", "BBB")}
-    set_values(stocks, aaa=last["AAA"] * 10, bbb=last["BBB"] * 20)
+    set_prices(aaa=last_close(stocks, "AAA") * 0.8, bbb=last_close(stocks, "BBB") * 1.3)
     assert "заметно отличается" not in body_of(run().run_id)
 
 
-def test_report_without_portfolio_has_no_positions_section(project):
-    outcome = service.run_and_save(load_config("config.toml"), DB)
-    assert "Мои позиции" not in body_of(outcome.run_id)
+def test_loss_is_shown_as_loss(holdings_project, stocks):
+    # Купили гораздо дороже, чем сейчас: убыток к вложенному
+    set_prices(aaa=last_close(stocks, "AAA") * 2, bbb=last_close(stocks, "BBB") * 2)
+    body = body_of(run().run_id)
+    assert "Убыток к вложенному" in body
+    assert "-50.0" in body
+
+
+def test_runs_saved_by_the_previous_version_do_not_break_the_report(holdings_project):
+    outcome = run()
+    with closing(storage.connect(DB)) as conn:
+        stored = storage.load_run(conn, outcome.run_id)
+    for position in stored.config["my_portfolio"]["positions"]:
+        position["value"] = position.pop("avg_price")  # так хранились позиции раньше
+    body = build_body(stored.results, stored.meta, stored.config)
+    assert "Мои позиции" not in body and "kpi tile-0" in body
 
 
 def test_cli_prints_and_writes_the_portfolio(holdings_project, capsys):
@@ -250,12 +293,12 @@ def test_cli_prints_and_writes_the_portfolio(holdings_project, capsys):
 
 def test_compare_shows_changed_positions(holdings_project, capsys):
     main(["run", "config.toml", "--no-report"])
-    edit_config("qty = 10, value = 6000", "qty = 12, value = 7200")
+    edit_config("qty = 10, avg_price = 100", "qty = 12, avg_price = 120")
     main(["run", "config.toml", "--no-report"])
     capsys.readouterr()
     assert main(["compare", "1", "2"]) == 0
     out = capsys.readouterr().out
-    assert "my_portfolio" in out and "AAA 10×6000" in out and "AAA 12×7200" in out
+    assert "my_portfolio" in out and "AAA 10×100" in out and "AAA 12×120" in out
 
 
 def test_database_from_version_3_still_works(holdings_project):

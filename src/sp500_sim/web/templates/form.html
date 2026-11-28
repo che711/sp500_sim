@@ -61,8 +61,9 @@
          aria-label="Тикер" autocomplete="off" spellcheck="false" {% if error %}class="invalid"{% endif %}>
   <input type="text" name="holding_qty" value="{{ row.qty }}" placeholder="Штук" inputmode="decimal"
          aria-label="Сколько акций" {% if error %}class="invalid"{% endif %}>
-  <input type="text" name="holding_value" value="{{ row.value }}" placeholder="Стоимость позиции"
-         inputmode="decimal" aria-label="Стоимость всей позиции сейчас" {% if error %}class="invalid"{% endif %}>
+  <input type="text" name="holding_price" value="{{ row.price }}" placeholder="Стоимость позиции"
+         inputmode="decimal" aria-label="Стоимость позиции: средняя цена покупки одной акции"
+         title="Средняя цена, по которой вы купили одну акцию" {% if error %}class="invalid"{% endif %}>
   <button type="button" class="btn remove" title="Убрать" aria-label="Убрать">×</button>
   {% if error %}<span class="error">{{ error }}</span>{% endif %}
 </div>
@@ -115,15 +116,15 @@
     <div>
     <section class="card">
       <h3>Мой портфель</h3>
-      <p class="hint">Ваши акции: тикер, сколько штук и сколько сейчас стоит вся позиция (как в вашем
-        приложении). Я покажу, как менялась бы стоимость этих позиций раньше, рядом со стратегиями.
-        Не нужен: оставьте пустым.</p>
+      <p class="hint">Ваши акции: тикер, сколько штук и «Стоимость позиции». Это средняя цена, по
+        которой вы купили <b>одну</b> акцию, как в вашем приложении. Я покажу график стоимости этих
+        акций, сколько вы вложили и вашу прибыль. Не нужен: оставьте пустым.</p>
       <div id="holdings">
-        {% for row in (v.holdings or [{"ticker": "", "qty": "", "value": ""}]) %}
+        {% for row in (v.holdings or [{"ticker": "", "qty": "", "price": ""}]) %}
         {{ holding_row(row, errors.get("holding." ~ loop.index0, "")) }}
         {% endfor %}
       </div>
-      <template id="holding-template">{{ holding_row({"ticker": "", "qty": "", "value": ""}) }}</template>
+      <template id="holding-template">{{ holding_row({"ticker": "", "qty": "", "price": ""}) }}</template>
       <div class="holding-tools">
         <button type="button" class="btn btn-small" id="add-holding">+ Добавить акцию</button>
         <label class="check">Цвет линии

@@ -29,7 +29,7 @@ AXIS = {
     "dark": {"text": "#b3afdc", "grid": "#3a3566"},
 }
 MAX_TRADE_ROWS = 1000
-PRICE_MISMATCH = 0.25  # на сколько цена из ваших данных может отличаться от цены в данных
+PRICE_MISMATCH = 6  # во сколько раз ваша средняя цена может отличаться от цены в данных
 HIGHER_IS_BETTER = ("final_value", "total_return", "cagr", "max_drawdown", "sharpe")
 
 Cell = str | tuple[str, str]  # текст или (текст, css-класс)
@@ -60,7 +60,13 @@ def _line_color(custom: str | None, theme: str, default: str) -> str:
     return custom if theme == "light" else lighten(custom, 0.3)
 
 
-def _chart(results: list[RunResult], kind: str, theme: str, colors: list[str | None]) -> Figure:
+def _chart(
+    results: list[RunResult],
+    kind: str,
+    theme: str,
+    colors: list[str | None],
+    cost: float | None = None,
+) -> Figure:
     palette, axis = PALETTES[theme], AXIS[theme]
     fig = Figure(figsize=(10, 3.9), layout="constrained")
     fig.patch.set_alpha(0)
@@ -84,9 +90,16 @@ def _chart(results: list[RunResult], kind: str, theme: str, colors: list[str | N
             ax.plot(x, drawdown, label=r.name, color=color, lw=1.4)
             ax.fill_between(x, drawdown, 0, color=color, alpha=0.1, linewidth=0)
 
+    if kind == "equity" and cost is not None:
+        # Пунктир: сколько вы вложили. Разрыв с линией портфеля справа - ваша прибыль или убыток
+        line = _line_color(colors[0], theme, palette[0])
+        ax.axhline(cost, color=line, lw=1.3, ls=(0, (5, 3)), label=f"{results[0].name}: вложено")
+
     if kind == "equity":
         ax.set_yscale("log")
         values = np.concatenate([(r.equity / r.start_cash).to_numpy() for r in results])
+        if cost is not None:
+            values = np.append(values, cost)
         if values.max() / values.min() >= 4:
             ax.yaxis.set_major_locator(LogLocator(base=10, subs=(1, 1.5, 2, 3, 4, 5, 7)))
         else:  # узкий диапазон: обычных делений мало, берём больше
@@ -98,7 +111,7 @@ def _chart(results: list[RunResult], kind: str, theme: str, colors: list[str | N
         ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:.0f}%"))
     fig.legend(
         loc="outside upper left",  # над графиком, чтобы не закрывать линии
-        ncol=len(results),
+        ncol=len(results) + (1 if kind == "equity" and cost is not None else 0),
         frameon=False,
         fontsize=10,
         labelcolor=axis["text"],
@@ -106,9 +119,11 @@ def _chart(results: list[RunResult], kind: str, theme: str, colors: list[str | N
     return fig
 
 
-def _chart_html(results: list[RunResult], kind: str, colors: list[str | None]) -> str:
-    light = _svg(_chart(results, kind, "light", colors))
-    dark = _svg(_chart(results, kind, "dark", colors))
+def _chart_html(
+    results: list[RunResult], kind: str, colors: list[str | None], cost: float | None = None
+) -> str:
+    light = _svg(_chart(results, kind, "light", colors, cost))
+    dark = _svg(_chart(results, kind, "dark", colors, cost))
     return (
         f'<div class="chart"><div class="chart-light">{light}</div>'
         f'<div class="chart-dark">{dark}</div></div>'
@@ -157,33 +172,63 @@ def _portfolio_text(strategy: dict[str, Any]) -> str:
     return " · ".join(f"{t} {w:g}%" for t, w in ordered)
 
 
-def _positions_text(positions: list[dict[str, Any]]) -> str:
-    """«AAPL 38% · MSFT 30%»: доли позиций по стоимости, крупные первыми."""
-    total = sum(p["value"] for p in positions)
-    ordered = sorted(positions, key=lambda p: (-p["value"], p["ticker"]))
-    return " · ".join(f"{p['ticker']} {p['value'] / total * 100:.0f}%" for p in ordered)
+def _has_cost(mine: dict[str, Any]) -> bool:
+    """Есть ли у позиций средняя цена. Прогоны прошлой версии хранили стоимость позиции."""
+    return all("avg_price" in p for p in mine["positions"])
 
 
-def _series_specs(config: dict[str, Any]) -> list[dict[str, Any]]:
+def _positions_text(positions: list[dict[str, Any]], last: dict[str, float]) -> str:
+    """«AAPL 38% · MSFT 30%»: доли позиций по стоимости сейчас, крупные первыми."""
+    now = {p["ticker"]: p["qty"] * last.get(p["ticker"], p["avg_price"]) for p in positions}
+    total = sum(now.values())
+    ordered = sorted(now.items(), key=lambda item: (-item[1], item[0]))
+    return " · ".join(f"{ticker} {value / total * 100:.0f}%" for ticker, value in ordered)
+
+
+def _mine_summary(config: dict[str, Any], results: list[RunResult]) -> dict[str, float] | None:
+    """Вложено, стоимость сейчас и прибыль по «Моему портфелю» (он первый среди результатов)."""
+    mine = config.get("my_portfolio")
+    if not mine or not results or not _has_cost(mine):
+        return None
+    invested = sum(p["qty"] * p["avg_price"] for p in mine["positions"])
+    value = float(results[0].equity.iloc[-1])
+    return {
+        "invested": invested,
+        "value": value,
+        "pnl": value - invested,
+        "pnl_pct": value / invested - 1,
+    }
+
+
+def _series_specs(config: dict[str, Any], meta: dict[str, Any]) -> list[dict[str, Any]]:
     """Цвет и подпись каждой линии результата в том же порядке, что и сами результаты:
     сначала «Мой портфель» (если он есть), потом стратегии."""
     specs = []
     mine = config.get("my_portfolio")
     if mine:
-        specs.append({"color": mine.get("color"), "note": _positions_text(mine["positions"])})
+        note = (
+            _positions_text(mine["positions"], meta.get("last_prices") or {})
+            if _has_cost(mine)
+            else ""
+        )
+        specs.append({"color": mine.get("color"), "note": note})
     for strategy in config.get("strategies", []):
         specs.append({"color": strategy.get("color"), "note": _portfolio_text(strategy)})
     return specs
 
 
-def _strategy_colors(config: dict[str, Any], count: int) -> list[str | None]:
-    colors = [spec["color"] for spec in _series_specs(config)]
+def _strategy_colors(config: dict[str, Any], meta: dict[str, Any], count: int) -> list[str | None]:
+    colors = [spec["color"] for spec in _series_specs(config, meta)]
     return (colors + [None] * count)[:count]
 
 
-def _strategy_notes(config: dict[str, Any], count: int) -> list[str]:
-    notes = [spec["note"] for spec in _series_specs(config)]
+def _strategy_notes(config: dict[str, Any], meta: dict[str, Any], count: int) -> list[str]:
+    notes = [spec["note"] for spec in _series_specs(config, meta)]
     return (notes + [""] * count)[:count]
+
+
+def _signed_money(value: float) -> str:
+    return ("+" if value >= 0 else "-") + fmt_money(abs(value))
 
 
 def _tile_attrs(index: int, color: str | None) -> str:
@@ -194,25 +239,43 @@ def _tile_attrs(index: int, color: str | None) -> str:
     return f'class="{css}" style="background:{gradient}"'
 
 
-def _kpis(results: list[RunResult], colors: list[str | None], notes: list[str]) -> str:
-    """Цветные плитки: по одной на стратегию, главная цифра - доходность за весь период."""
+def _kpis(
+    results: list[RunResult],
+    colors: list[str | None],
+    notes: list[str],
+    summary: dict[str, float] | None,
+) -> str:
+    """Цветные плитки: по одной на линию. Главная цифра у стратегии - доходность за период,
+    а у «Моего портфеля» - прибыль или убыток относительно вложенных денег."""
     cards = []
     for i, r in enumerate(results):
         m = r.metrics
         sub = f'<div class="kpi-sub">{_esc(notes[i])}</div>' if notes[i] else ""
-        pill = "Прибыль" if m["total_return"] >= 0 else "Убыток"
+        if i == 0 and summary:
+            headline, gain = summary["pnl_pct"], summary["pnl"] >= 0
+            pill = "Прибыль к вложенному" if gain else "Убыток к вложенному"
+            rows = (
+                f"<div><small>Стоимость</small><b>$ {fmt_money(summary['value'])}</b></div>"
+                f"<div><small>Вложено</small><b>$ {fmt_money(summary['invested'])}</b></div>"
+                f"<div><small>Прибыль</small><b>{_signed_money(summary['pnl'])}</b></div>"
+                f"<div><small>Просадка</small><b>{fmt_pct(m['max_drawdown'])}</b></div>"
+            )
+        else:
+            headline, gain = m["total_return"], m["total_return"] >= 0
+            pill = "Прибыль" if gain else "Убыток"
+            rows = (
+                f"<div><small>Итог</small><b>$ {fmt_money(m['final_value'])}</b></div>"
+                f"<div><small>В год</small><b>{fmt_pct(m['cagr'])}</b></div>"
+                f"<div><small>Просадка</small><b>{fmt_pct(m['max_drawdown'])}</b></div>"
+                f"<div><small>Sharpe</small><b>{m['sharpe']:.2f}</b></div>"
+            )
         cards.append(
             f"<div {_tile_attrs(i, colors[i])}>"
             f'<div class="kpi-name">{_esc(r.name)}</div>{sub}'
-            f'<div class="kpi-value"><span class="kpi-num">{m["total_return"] * 100:+.1f}</span>'
+            f'<div class="kpi-value"><span class="kpi-num">{headline * 100:+.1f}</span>'
             f'<span class="kpi-unit">%</span></div>'
             f'<div class="kpi-pill">{pill}</div>'
-            f'<div class="kpi-rows">'
-            f"<div><small>Итог</small><b>$ {fmt_money(m['final_value'])}</b></div>"
-            f"<div><small>В год</small><b>{fmt_pct(m['cagr'])}</b></div>"
-            f"<div><small>Просадка</small><b>{fmt_pct(m['max_drawdown'])}</b></div>"
-            f"<div><small>Sharpe</small><b>{m['sharpe']:.2f}</b></div>"
-            f"</div></div>"
+            f'<div class="kpi-rows">{rows}</div></div>'
         )
     return f'<div class="kpis">{"".join(cards)}</div>'
 
@@ -271,52 +334,86 @@ def _trades_table(r: RunResult) -> str:
     return table + note
 
 
-def _positions_table(config: dict[str, Any], meta: dict[str, Any]) -> str:
-    """«Мои позиции»: что вы ввели и что из этого следует (цена акции, доля)."""
+def _positions_table(
+    config: dict[str, Any], meta: dict[str, Any], summary: dict[str, float] | None
+) -> str:
+    """«Мои позиции»: что вы ввели и что из этого следует (вложено, стоимость сейчас, прибыль)."""
     mine = config.get("my_portfolio")
-    if not mine:
+    if not mine or not _has_cost(mine):
         return ""
-    positions = sorted(mine["positions"], key=lambda p: -p["value"])
-    total = sum(p["value"] for p in positions)
     last = meta.get("last_prices") or {}
+    entries = []
+    for p in mine["positions"]:
+        price = last.get(p["ticker"])
+        entries.append((p, price, p["qty"] * price if price is not None else None))
+    entries.sort(key=lambda e: -(e[2] if e[2] is not None else e[0]["qty"] * e[0]["avg_price"]))
+    now_total = sum(v for _, _, v in entries if v is not None)
+    complete = all(v is not None for _, _, v in entries)
+
     rows: list[list[Cell]] = []
     doubtful = []
-    for p in positions:
-        implied = p["value"] / p["qty"]
-        price = last.get(p["ticker"])
-        off = price is not None and abs(implied / price - 1) > PRICE_MISMATCH
+    for p, price, now in entries:
+        invested = p["qty"] * p["avg_price"]
+        off = price is not None and not 1 / PRICE_MISMATCH < p["avg_price"] / price < PRICE_MISMATCH
         if off:
             doubtful.append(p["ticker"])
+        profit = None if now is None else now - invested
         rows.append(
             [
                 f"<strong>{_esc(p['ticker'])}</strong>",
                 f"{p['qty']:g}",
-                fmt_money(implied),
-                fmt_money(p["value"]),
-                f"{p['value'] / total * 100:.1f}%",
-                (fmt_money(price) if price is not None else "—", "neg" if off else ""),
+                (fmt_money(p["avg_price"]), "neg" if off else ""),
+                fmt_money(invested),
+                fmt_money(price) if price is not None else "—",
+                fmt_money(now) if now is not None else "—",
+                (_signed_money(profit), _sign_class(profit)) if profit is not None else "—",
+                (fmt_pct(profit / invested), _sign_class(profit)) if profit is not None else "—",
+                f"{now / now_total * 100:.1f}%" if now is not None and now_total else "—",
             ]
         )
-    rows.append(["Итого", "", "", f"<strong>{fmt_money(total)}</strong>", "100%", ""])
+    if summary and complete:
+        total_row: list[Cell] = [
+            "Итого",
+            "",
+            "",
+            f"<strong>{fmt_money(summary['invested'])}</strong>",
+            "",
+            f"<strong>{fmt_money(now_total)}</strong>",
+            (
+                _signed_money(now_total - summary["invested"]),
+                _sign_class(now_total - summary["invested"]),
+            ),
+            (
+                fmt_pct(now_total / summary["invested"] - 1),
+                _sign_class(now_total - summary["invested"]),
+            ),
+            "100%",
+        ]
+        rows.append(total_row)
     header = [
         "Тикер",
         "Штук",
-        "Цена за акцию (из ваших данных)",
+        "Средняя цена",
+        "Вложено",
+        f"Цена сейчас ({meta['data_end']})",
         "Стоимость",
+        "Прибыль",
+        "%",
         "Доля",
-        f"Последняя цена в данных ({meta['data_end']})",
     ]
     intro = (
-        "График показывает, как менялась бы стоимость ваших нынешних позиций, если бы они были "
-        "у вас раньше. Это не ваша фактическая доходность: покупать вы могли позже."
+        "Вложено: штук × ваша средняя цена. Стоимость: штук × последняя цена в данных. "
+        "График показывает, как менялась бы стоимость этих акций раньше, если бы они были у вас: "
+        "это не ваша фактическая доходность, покупать вы могли позже. Пунктир на графике: сколько "
+        "вы вложили."
     )
     warning = ""
     if doubtful:
         warning = (
-            '<div class="alert alert-error">Цена за акцию из ваших данных заметно отличается от '
-            f"цены в данных ({_esc(', '.join(doubtful))}). Проверьте, что в поле «стоимость» стоит "
-            "стоимость всей позиции, а не цена одной акции. Если бумага в другой валюте, "
-            "расхождение нормально.</div>"
+            '<div class="alert alert-error">Средняя цена заметно отличается от цены в данных '
+            f"({_esc(', '.join(doubtful))}). Проверьте, что вы ввели среднюю цену одной акции "
+            "(в приложении она может называться «Стоимость позиции»), а не стоимость всей "
+            "позиции. Если бумага в другой валюте, расхождение нормально.</div>"
         )
     return (
         "<h2>Мои позиции</h2>"
@@ -359,22 +456,31 @@ def _params_table(meta: dict[str, Any], config: dict[str, Any]) -> str:
 
 def build_body(results: list[RunResult], meta: dict[str, Any], config: dict[str, Any]) -> str:
     """Содержимое отчёта без оформления страницы: его вставляет и сайт, и отдельный файл."""
-    trades = "".join(
-        f"<details><summary>{_esc(r.name)} — сделок: {len(r.trades)}</summary>"
-        f"{_trades_table(r)}</details>"
-        for r in results
-    )
-    colors = _strategy_colors(config, len(results))
-    notes = _strategy_notes(config, len(results))
-    return f"""{_kpis(results, colors, notes)}
+    summary = _mine_summary(config, results)
+    trades = ""
+    for i, r in enumerate(results):
+        if i == 0 and summary:  # у «Моего портфеля» сделок нет: количество акций неизменно
+            trades += (
+                f'<p class="note-bg">{_esc(r.name)}: сделок нет, количество акций '
+                "считается неизменным.</p>"
+            )
+            continue
+        trades += (
+            f"<details><summary>{_esc(r.name)} — сделок: {len(r.trades)}</summary>"
+            f"{_trades_table(r)}</details>"
+        )
+    colors = _strategy_colors(config, meta, len(results))
+    notes = _strategy_notes(config, meta, len(results))
+    cost = summary["invested"] / results[0].start_cash if summary else None
+    return f"""{_kpis(results, colors, notes, summary)}
 
 <h2>Итоги</h2>
 {_metrics_table(results)}
 
-{_positions_table(config, meta)}
+{_positions_table(config, meta, summary)}
 
 <h2>Капитал</h2>
-{_chart_html(results, "equity", colors)}
+{_chart_html(results, "equity", colors, cost)}
 
 <h2>Просадка</h2>
 {_chart_html(results, "drawdown", colors)}

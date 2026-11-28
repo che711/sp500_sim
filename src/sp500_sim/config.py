@@ -143,11 +143,13 @@ class StrategyConfig:
 
 @dataclass(frozen=True)
 class Position:
-    """Позиция из вашего приложения: сколько акций и сколько стоит вся позиция сейчас."""
+    """Позиция из вашего приложения: сколько акций и по какой средней цене вы их купили."""
 
     ticker: str
     qty: float
-    value: float
+    avg_price: (
+        float  # средняя цена покупки одной акции (в приложении может зваться «Стоимость позиции»)
+    )
 
 
 @dataclass(frozen=True)
@@ -316,7 +318,7 @@ def _my_portfolio(raw: dict[str, Any], errors: list[ConfigError]) -> MyPortfolio
 
     items = section.get("positions")
     if not isinstance(items, list) or not items:
-        fail('добавьте хотя бы одну позицию: { ticker = "AAPL", qty = 10, value = 1900 }')
+        fail('добавьте хотя бы одну позицию: { ticker = "AAPL", qty = 10, avg_price = 190 }')
         return None
     if len(items) > MAX_HOLDINGS:
         fail(f"позиций не больше {MAX_HOLDINGS}")
@@ -326,22 +328,22 @@ def _my_portfolio(raw: dict[str, Any], errors: list[ConfigError]) -> MyPortfolio
     seen: set[str] = set()
     for i, item in enumerate(items):
         where = f"my_portfolio.{i}"
-        if not isinstance(item, dict) or set(item) - {"ticker", "qty", "value"}:
-            fail("позиция: нужны только поля ticker, qty, value", where)
+        if not isinstance(item, dict) or set(item) - {"ticker", "qty", "avg_price"}:
+            fail("позиция: нужны только поля ticker, qty, avg_price", where)
             continue
         ticker = str(item.get("ticker", "")).strip().upper()
-        qty, value = item.get("qty"), item.get("value")
+        qty, avg_price = item.get("qty"), item.get("avg_price")
         if not TICKER_RE.fullmatch(ticker):
             fail("тикер: допустимы латинские буквы, цифры и знаки . ^ = _ -", where)
         elif ticker in seen:
             fail(f"тикер {ticker} указан дважды", where)
         elif not _is_number(qty) or qty <= 0:
             fail(f"{ticker}: количество должно быть положительным числом", where)
-        elif not _is_number(value) or value <= 0:
-            fail(f"{ticker}: стоимость должна быть положительным числом", where)
+        elif not _is_number(avg_price) or avg_price <= 0:
+            fail(f"{ticker}: средняя цена должна быть положительным числом", where)
         else:
             seen.add(ticker)
-            positions.append(Position(ticker=ticker, qty=float(qty), value=float(value)))
+            positions.append(Position(ticker=ticker, qty=float(qty), avg_price=float(avg_price)))
     if len(errors) > problems:
         return None
     return MyPortfolioConfig(

@@ -447,7 +447,7 @@ HOLDINGS_FORM = {
     **FORM,
     "holding_ticker": ["AAA", "BBB", ""],
     "holding_qty": ["10", "20", ""],
-    "holding_value": ["6000", "4000", ""],
+    "holding_price": ["100", "50", ""],
     "portfolio_color": "#ff8800",
 }
 
@@ -455,7 +455,8 @@ HOLDINGS_FORM = {
 def test_form_has_holding_fields(web):
     page = web.get("/").text
     assert 'name="holding_ticker"' in page and 'name="holding_qty"' in page
-    assert 'name="holding_value"' in page and "Мой портфель" in page
+    assert 'name="holding_price"' in page and "Мой портфель" in page
+    assert "Стоимость позиции" in page and "средняя цена" in page.lower()
 
 
 def test_form_builds_my_portfolio_run(web_holdings):
@@ -466,12 +467,12 @@ def test_form_builds_my_portfolio_run(web_holdings):
     assert info["ticker"] == "AAA, BBB, TEST"
     assert info["config"]["my_portfolio"]["color"] == "#ff8800"
     page = web_holdings.get("/runs/1").text
-    assert "Мои позиции" in page and "AAA 60% · BBB 40%" in page
+    assert "Мои позиции" in page and "к вложенному" in page
     assert "linear-gradient(135deg,#ff8800" in page  # свой цвет портфеля
 
 
 def test_empty_holding_rows_do_not_create_a_portfolio(web_holdings):
-    data = {**HOLDINGS_FORM, "holding_ticker": [""], "holding_qty": [""], "holding_value": [""]}
+    data = {**HOLDINGS_FORM, "holding_ticker": [""], "holding_qty": [""], "holding_price": [""]}
     web_holdings.post("/runs", data=data)
     assert web_holdings.get("/api/runs/1").json()["config"]["my_portfolio"] is None
     assert "Мои позиции" not in web_holdings.get("/runs/1").text
@@ -482,7 +483,7 @@ def test_holding_errors_are_shown_and_input_is_kept(web_holdings):
     response = web_holdings.post("/runs", data=data)
     assert response.status_code == 422
     assert "количество: нужно число" in response.text
-    assert 'value="abc"' in response.text and 'value="6000"' in response.text
+    assert 'value="abc"' in response.text and 'value="100"' in response.text
     assert web_holdings.get("/api/runs").json() == []
 
 
@@ -504,18 +505,18 @@ def test_form_with_nothing_is_an_error(web_holdings):
 def test_form_is_prefilled_with_positions_from_a_run(web_holdings):
     web_holdings.post("/runs", data=HOLDINGS_FORM)
     page = web_holdings.get("/", params={"from_run": 1}).text
-    assert 'value="AAA"' in page and 'value="6000"' in page and 'value="20"' in page
+    assert 'value="AAA"' in page and 'value="100"' in page and 'value="20"' in page
     assert 'value="#ff8800"' in page
 
 
-def test_api_accepts_my_portfolio(web_holdings):
+def test_api_accepts_my_portfolio(web_holdings, stocks):
     config = {
         "data": {"ticker": "TEST", "start": "2020-01-01", "end": "2022-01-01"},
         "my_portfolio": {
             "name": "Брокерский счёт",
             "positions": [
-                {"ticker": "AAA", "qty": 10, "value": 6000},
-                {"ticker": "BBB", "qty": 20, "value": 4000},
+                {"ticker": "AAA", "qty": 10, "avg_price": 100},
+                {"ticker": "BBB", "qty": 20, "avg_price": 50},
             ],
         },
     }
@@ -523,8 +524,9 @@ def test_api_accepts_my_portfolio(web_holdings):
     info = web_holdings.get("/api/runs/1").json()
     assert [r["strategy"] for r in info["results"]] == ["Брокерский счёт"]
     equity = web_holdings.get("/api/runs/1/equity").json()["Брокерский счёт"]
-    assert equity["values"][-1] == pytest.approx(10_000)
+    expected = 10 * stocks["AAA"]["Close"].iloc[-1] + 20 * stocks["BBB"]["Close"].iloc[-1]
+    assert equity["values"][-1] == pytest.approx(expected)  # количество на цену
 
-    bad = {**config, "my_portfolio": {"positions": [{"ticker": "AAA", "qty": 0, "value": 5}]}}
+    bad = {**config, "my_portfolio": {"positions": [{"ticker": "AAA", "qty": 0, "avg_price": 5}]}}
     response = web_holdings.post("/api/runs", json=bad)
     assert response.status_code == 422 and "количество" in response.json()["errors"][0]

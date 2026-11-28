@@ -44,11 +44,11 @@ class StrategyRow:
 
 @dataclass
 class HoldingRow:
-    """Строка «Моего портфеля»: тикер, сколько акций, сколько стоит вся позиция сейчас."""
+    """Строка «Моего портфеля»: тикер, сколько акций и средняя цена покупки одной акции."""
 
     ticker: str = ""
     qty: str = ""
-    value: str = ""
+    price: str = ""
 
 
 def _plain(number: float) -> str:
@@ -92,7 +92,7 @@ class FormValues:
                 for i, s in enumerate(config.strategies)
             ],
             holdings=[
-                HoldingRow(p.ticker, _plain(p.qty), _plain(p.value))
+                HoldingRow(p.ticker, _plain(p.qty), _plain(p.avg_price))
                 for p in (config.my_portfolio.positions if config.my_portfolio else [])
             ],
             portfolio_color=(config.my_portfolio.color if config.my_portfolio else None) or "",
@@ -115,7 +115,7 @@ class FormValues:
         holdings = zip_longest(
             form.getlist("holding_ticker"),
             form.getlist("holding_qty"),
-            form.getlist("holding_value"),
+            form.getlist("holding_price"),
             fillvalue="",
         )
         return cls(
@@ -236,17 +236,17 @@ def parse_form(
             raw["broker"][name] = percent / 100
 
     filled = [
-        h for h in values.holdings if h.ticker or h.qty or h.value
+        h for h in values.holdings if h.ticker or h.qty or h.price
     ]  # пустые строки пропускаем
     positions: list[dict[str, Any]] = []
     for i, row in enumerate(filled):
         item: dict[str, Any] = {"ticker": row.ticker}
-        for key, label in (("qty", "количество"), ("value", "стоимость")):
+        for key, label in (("qty", "количество"), ("price", "стоимость позиции")):
             number = _number(getattr(row, key), "_tmp", {})
             if number is None:
                 errors.setdefault(f"holding.{i}", f"{label}: нужно число")
             else:
-                item[key] = number
+                item["avg_price" if key == "price" else key] = number
         positions.append(item)
     if positions:
         raw["my_portfolio"] = {"positions": positions}
